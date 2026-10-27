@@ -1,4 +1,4 @@
-// Renders the app icon (an SF Symbol on a rounded gradient tile) to a 1024 px PNG.
+// Renders the app icon (Tabler's filled layout-dashboard glyph on a rounded gradient tile) to a 1024 px PNG.
 //   swift scripts/make-icon.swift <output.png>
 import AppKit
 
@@ -12,12 +12,13 @@ let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { r
         NSColor(red: 0.07, green: 0.09, blue: 0.14, alpha: 1),
     ])?.draw(in: path, angle: -90)
 
-    let config = NSImage.SymbolConfiguration(pointSize: size * 0.42, weight: .semibold)
-        .applying(.init(paletteColors: [NSColor(red: 0.45, green: 0.86, blue: 0.55, alpha: 1)]))
-    if let symbol = NSImage(systemSymbolName: "switch.2", accessibilityDescription: nil)?
-        .withSymbolConfiguration(config) {
-        let s = symbol.size
-        symbol.draw(in: NSRect(x: rect.midX - s.width / 2, y: rect.midY - s.height / 2, width: s.width, height: s.height))
+    // Same glyph as the default menu bar icon (Tabler Icons, MIT).
+    let svg = """
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#73DB8C"><path d="M9 3a2 2 0 0 1 2 2v6a2 2 0 0 1 -2 2h-4a2 2 0 0 1 -2 -2v-6a2 2 0 0 1 2 -2zm0 12a2 2 0 0 1 2 2v2a2 2 0 0 1 -2 2h-4a2 2 0 0 1 -2 -2v-2a2 2 0 0 1 2 -2zm10 -4a2 2 0 0 1 2 2v6a2 2 0 0 1 -2 2h-4a2 2 0 0 1 -2 -2v-6a2 2 0 0 1 2 -2zm0 -8a2 2 0 0 1 2 2v2a2 2 0 0 1 -2 2h-4a2 2 0 0 1 -2 -2v-2a2 2 0 0 1 2 -2z"/></svg>
+    """
+    if let glyph = NSImage(data: Data(svg.utf8)) {
+        let side = size * 0.5
+        glyph.draw(in: NSRect(x: rect.midX - side / 2, y: rect.midY - side / 2, width: side, height: side))
     }
     return true
 }

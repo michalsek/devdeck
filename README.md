@@ -4,22 +4,26 @@ A macOS menu bar app for the things coding agents and dev work leave running:
 simulators and devices, dev servers, and agent sound notifications (peon-ping).
 
 **Menu (click the menu bar icon)**
-- Agent sounds: mute all, volume, voice pack, per-sound volume
-- Running devices, with Shut Down / Stop
-- Running dev servers (project, kind, port, uptime), with Stop
-- The number next to the icon is how many dev servers are running
 
-**Dashboard window**
+A native macOS menu, so it looks and behaves like the system's own.
+- Agent sounds: mute all, volume, voice pack, per-sound volume
+- Running devices: hover one for Shut Down / Stop; "Start a Device" boots a simulator or emulator
+- Running dev servers (project, kind, port, uptime): hover one for Stop, Open in Browser,
+  Reveal in Finder, Open in Terminal
+- The number next to the icon is how many dev servers are running; the icon dims while
+  sounds are muted. General in the dashboard has a choice of icons.
+
+**Dashboard window** (laid out like System Settings)
 - Devices: iOS simulators (boot / shut down), Android emulators (start / stop),
   paired iPhones/iPads and adb devices
 - Dev Servers: Metro (Expo / React Native, with the apps connected to it), Vite,
   Next.js, Storybook and other servers run by node, bun, deno, python, ruby or php;
-  agent tools such as the argent tool-server are listed separately. Select one for
-  its folder, command and PID; right-click to open it in the browser, Finder or Terminal.
-- Sounds, Voice Packs, Clients: peon-ping settings (see below)
-- General: open at login, peon-ping info
+  agent tools such as the argent tool-server are listed separately. The ⓘ button shows
+  a server's folder, command and PID; right-click to open it in the browser, Finder or Terminal.
+- Agent Sounds, Voice Packs, Agent Apps: peon-ping settings (see below)
+- General: open at login, menu bar icon, peon-ping info
 
-Stop and Shut Down ask for a second click to confirm.
+In the dashboard, Stop and Shut Down ask for a second click to confirm.
 
 ## How it finds things
 
@@ -45,7 +49,7 @@ and per-client control need a `peon.sh` that supports `category_volumes` /
 
 ## Build
 
-Requires macOS 14+ and Xcode (or its command line tools).
+Requires Xcode (or its command line tools).
 
 ```bash
 bash scripts/build-app.sh            # builds build/DevDeck.app
@@ -53,10 +57,13 @@ bash scripts/build-app.sh --install  # also copies it to ~/Applications and laun
 swift test                           # scanner and stop logic, including a real server
 ```
 
-To render the menu and every dashboard page to PNGs without clicking through them
-(debug builds only):
+Requires macOS 26 or later, and must be built with its SDK or newer: apps linked against
+an older SDK run in compatibility mode, without the current menu and sidebar materials.
+
+To open a window at launch (handy for screenshots), pass `--open`:
 
 ```bash
-swift build
-DEVDECK_SNAPSHOT_DIR=/tmp/shots .build/debug/DevDeck
+open ~/Applications/DevDeck.app --args --open dashboard:servers   # pages: devices, servers, sounds, packs, clients, general
 ```
+
+The menu bar icons are filled icons from [Tabler Icons](https://tabler.io/icons) (MIT).

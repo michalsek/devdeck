@@ -30,20 +30,28 @@ struct CommitSlider: View {
     }
 }
 
+/// Plays a sample. Large on the dashboard pages, small in the menu.
 struct PreviewButton: View {
+    var large = false
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: "play.circle")
+            Image(systemName: large ? "play.circle.fill" : "play.circle")
+                .font(.system(size: large ? 24 : 13))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(large ? Color.accentColor : .secondary)
+                .frame(width: large ? 30 : 18, height: large ? 30 : 18)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.borderless)
         .help("Play a sample")
+        .accessibilityLabel("Play a sample")
     }
 }
 
 /// One row per sound category: on/off, volume relative to master, preview.
-/// Compact (menu) puts everything on one line; detailed (settings) adds the description.
+/// Compact (menu) puts everything on one line; detailed (dashboard) adds the description.
 struct CategoryRow: View {
     @EnvironmentObject private var store: PeonStore
     let category: SoundCategory
@@ -51,21 +59,29 @@ struct CategoryRow: View {
 
     var body: some View {
         if showsDetail {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack {
-                    toggle
-                    Spacer()
-                    preview
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(category.title)
+                            Text(category.detail).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Toggle(category.title, isOn: enabledBinding)
+                            .toggleStyle(.switch)
+                            .labelsHidden()
+                    }
+                    slider
                 }
-                Text(category.detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.leading, 20)
-                slider.padding(.leading, 20)
+                preview
             }
+            .padding(.vertical, 2)
         } else {
             HStack(spacing: 6) {
-                toggle.frame(width: 140, alignment: .leading)
+                Toggle(category.title, isOn: enabledBinding)
+                    .toggleStyle(.checkbox)
+                    .help(category.detail)
+                    .frame(width: 140, alignment: .leading)
                 slider
                 preview
             }
@@ -74,10 +90,8 @@ struct CategoryRow: View {
 
     private var enabled: Bool { store.isEnabled(category) }
 
-    private var toggle: some View {
-        Toggle(category.title, isOn: Binding(get: { enabled }, set: { store.setEnabled(category, $0) }))
-            .toggleStyle(.checkbox)
-            .help(category.detail)
+    private var enabledBinding: Binding<Bool> {
+        Binding(get: { enabled }, set: { store.setEnabled(category, $0) })
     }
 
     private var slider: some View {
@@ -89,7 +103,7 @@ struct CategoryRow: View {
     }
 
     private var preview: some View {
-        PreviewButton { store.preview(category) }
+        PreviewButton(large: showsDetail) { store.preview(category) }
             .disabled(!enabled || (store.activePack?.sounds[category.id]?.isEmpty ?? true))
     }
 }

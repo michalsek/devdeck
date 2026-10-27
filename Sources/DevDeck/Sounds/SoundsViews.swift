@@ -5,36 +5,37 @@ struct SoundsView: View {
 
     var body: some View {
         Form {
+            PageHeader(page: .sounds)
             Section {
                 Toggle("Mute all sounds", isOn: Binding(get: { store.paused }, set: { store.setPaused($0) }))
                 LabeledContent("Volume") {
-                    CommitSlider(value: store.volume, commit: store.setVolume)
+                    CommitSlider(value: store.volume, commit: store.setVolume, disabled: store.paused)
+                        .frame(maxWidth: 260)
                 }
-            }
-            Section {
-                Toggle("Desktop notifications", isOn: Binding(
-                    get: { store.desktopNotifications }, set: { store.setDesktopNotifications($0) }))
-            } footer: {
-                Text("Agent sounds come from peon-ping. Desktop notifications are its banners when an agent finishes or needs you.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Toggle(isOn: Binding(
+                    get: { store.desktopNotifications }, set: { store.setDesktopNotifications($0) })) {
+                    Text("Desktop notifications")
+                    Text("peon-ping's banners when an agent finishes or needs you")
+                }
             }
             Section {
                 ForEach(SoundCategory.all) { category in
                     CategoryRow(category: category, showsDetail: true)
                 }
             } header: {
-                Text("Categories")
+                Text("Sounds")
             } footer: {
                 Text(store.supportsClientControls
-                    ? "Category volume is relative to the main volume. At 0% the notification still shows but no sound plays."
-                    : "Category volume needs a peon-ping build with category_volumes support; on/off works everywhere.")
+                    ? "Each volume is relative to the main volume. At 0% the notification still shows but no sound plays."
+                    : "Per-sound volume needs a peon-ping build with category_volumes support; on/off works everywhere.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            if store.lastError != nil {
+                Section { ErrorRow(errors: [store.lastError]) }
+            }
         }
         .formStyle(.grouped)
-        .navigationTitle("Sounds")
     }
 }
 
@@ -43,27 +44,17 @@ struct PacksView: View {
 
     var body: some View {
         Form {
+            PageHeader(page: .packs)
             Section {
                 ForEach(store.packs) { pack in
-                    HStack {
-                        Image(systemName: pack.id == store.defaultPack ? "checkmark.circle.fill" : "circle")
-                            .foregroundStyle(pack.id == store.defaultPack ? Color.accentColor : .secondary)
-                        VStack(alignment: .leading) {
-                            Text(pack.displayName)
-                            Text(pack.id).font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        PreviewButton { store.preview(SoundCategory.all[0], pack: pack) }
-                        Button("Use") { store.usePack(pack.id) }
-                            .disabled(pack.id == store.defaultPack)
-                    }
+                    PackRow(pack: pack, selected: pack.id == store.defaultPack)
                 }
             } header: {
-                Text("Installed packs")
+                Text("Installed Packs")
             } footer: {
                 VStack(alignment: .leading, spacing: 4) {
                     if store.hasPackRotation {
-                        Text("Rotation mode \"\(store.rotationMode)\" with \(store.packRotation.count) pack(s) can override the default for new sessions.")
+                        Text("Rotation mode \"\(store.rotationMode)\" with \(store.packRotation.count) pack(s) can override this for new sessions.")
                     }
                     Text("Install more with `peon packs list --registry` and `peon packs install <name>`.")
                 }
@@ -72,7 +63,35 @@ struct PacksView: View {
             }
         }
         .formStyle(.grouped)
-        .navigationTitle("Voice Packs")
+    }
+}
+
+/// A single-choice row: clicking anywhere on it picks the pack; the play button only previews.
+private struct PackRow: View {
+    @EnvironmentObject private var store: PeonStore
+    let pack: SoundPack
+    let selected: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Button { store.usePack(pack.id) } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 16))
+                        .foregroundStyle(selected ? Color.accentColor : .secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(pack.displayName)
+                        Text(pack.id).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityAddTraits(selected ? [.isSelected] : [])
+            PreviewButton(large: true) { store.preview(SoundCategory.all[0], pack: pack) }
+        }
+        .padding(.vertical, 2)
     }
 }
 
@@ -81,28 +100,26 @@ struct ClientsView: View {
 
     var body: some View {
         Form {
+            PageHeader(page: .clients)
             Section {
                 ForEach(store.clientIDs, id: \.self) { id in
                     Toggle(isOn: Binding(get: { store.isClientEnabled(id) }, set: { store.setClientEnabled(id, $0) })) {
-                        VStack(alignment: .leading) {
-                            Text(ClientCatalog.name(for: id))
-                            Text(subtitle(for: id)).font(.caption).foregroundStyle(.secondary)
-                        }
+                        Text(ClientCatalog.name(for: id))
+                        Text(subtitle(for: id))
                     }
                 }
             } header: {
-                Text("Apps allowed to play sounds")
+                Text("Apps Allowed to Play Sounds")
             } footer: {
                 Text(store.supportsClientControls
-                    ? "A disabled client gets no sounds and no notifications. Agents running inside T3 Code count as T3 Code."
-                    : "Client control needs a peon-ping build with disabled_clients support.")
+                    ? "A disabled app gets no sounds and no notifications. Agents running inside T3 Code count as T3 Code."
+                    : "This needs a peon-ping build with disabled_clients support.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            .disabled(!store.supportsClientControls)
         }
         .formStyle(.grouped)
-        .disabled(!store.supportsClientControls)
-        .navigationTitle("Clients")
     }
 
     private func subtitle(for id: String) -> String {

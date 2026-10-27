@@ -35,24 +35,8 @@ struct StatusDot: View {
     }
 }
 
-struct Pill: View {
-    let text: String
-    var tint: Color = .secondary
-
-    var body: some View {
-        Text(text)
-            .font(.caption)
-            .lineLimit(1)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 1)
-            .background(tint.opacity(0.15), in: Capsule())
-            .foregroundStyle(tint == .secondary ? Color.primary : tint)
-    }
-}
-
 /// A destructive button that asks first: the first click turns it into
-/// "Confirm", which acts on a second click within a few seconds. Works inside
-/// the menu bar panel, where a modal dialog would close the panel.
+/// "Confirm", which acts on a second click within a few seconds.
 struct ConfirmButton: View {
     let title: String
     var busy = false
@@ -62,7 +46,7 @@ struct ConfirmButton: View {
 
     var body: some View {
         if busy {
-            ProgressView().controlSize(.small).frame(minWidth: 44)
+            ProgressView().controlSize(.small).frame(minWidth: 52)
         } else if armed {
             button.buttonStyle(.borderedProminent).tint(.red).help("Click again to confirm")
         } else {
@@ -82,22 +66,6 @@ struct ConfirmButton: View {
                     armed = false
                 }
             }
-        }
-        .controlSize(.small)
-    }
-}
-
-/// Empty or not-yet-loaded list state.
-struct Placeholder: View {
-    let title: String
-    let systemImage: String
-    var detail: String?
-
-    var body: some View {
-        ContentUnavailableView {
-            Label(title, systemImage: systemImage)
-        } description: {
-            if let detail { Text(detail) }
         }
     }
 }

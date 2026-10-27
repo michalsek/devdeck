@@ -3,52 +3,34 @@ import SwiftUI
 
 struct ServersView: View {
     @EnvironmentObject private var store: ServerStore
-    @State private var selection: DevServer.ID?
-    @State private var showInspector = true
+    @State private var details: DevServer?
 
     var body: some View {
-        List(selection: $selection) {
-            Section("Dev servers") {
+        Form {
+            PageHeader(page: .servers)
+            Section("Dev Servers") {
                 if store.devServers.isEmpty {
-                    Text("No dev servers running").foregroundStyle(.secondary)
+                    Text(store.loaded ? "No dev servers running" : "Loading…").foregroundStyle(.secondary)
                 }
-                ForEach(store.devServers) { ServerRow(server: $0).tag($0.id) }
+                ForEach(store.devServers) { ServerRow(server: $0) { details = $0 } }
             }
             if !store.agentTools.isEmpty {
-                Section("Agent tools") {
-                    ForEach(store.agentTools) { ServerRow(server: $0).tag($0.id) }
+                Section {
+                    ForEach(store.agentTools) { ServerRow(server: $0) { details = $0 } }
+                } header: {
+                    Text("Agent Tools")
+                } footer: {
+                    Text("Helpers started by coding agents, such as the argent tool server.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
-            if let error = store.lastError {
-                Text(error).font(.caption).foregroundStyle(.red)
+            if store.lastError != nil {
+                Section { ErrorRow(errors: [store.lastError]) }
             }
         }
-        .listStyle(.inset(alternatesRowBackgrounds: false))
-        .overlay {
-            if !store.loaded { ProgressView() }
-        }
-        .navigationTitle("Dev Servers")
-        .navigationSubtitle("\(store.devServers.count) running")
-        .inspector(isPresented: $showInspector) {
-            Group {
-                if let server = store.servers.first(where: { $0.id == selection }) {
-                    ServerInspector(server: server)
-                } else {
-                    Placeholder(title: "No selection", systemImage: "server.rack",
-                                detail: "Select a server to see its details.")
-                }
-            }
-            .inspectorColumnWidth(min: 240, ideal: 280, max: 400)
-        }
-        .toolbar {
-            ToolbarItemGroup {
-                Button("Refresh", systemImage: "arrow.clockwise") { Task { await store.refresh() } }
-                Button("Inspector", systemImage: "sidebar.trailing") { showInspector.toggle() }
-            }
-        }
-        .onAppear {
-            if selection == nil { selection = store.devServers.first?.id }
-        }
+        .formStyle(.grouped)
+        .sheet(item: $details) { ServerDetails(snapshot: $0) }
     }
 }
 
@@ -63,29 +45,38 @@ extension DevServer {
         if metro.apps.isEmpty { return "no app connected" }
         return metro.apps.count == 1 ? "1 app connected" : "\(metro.apps.count) apps connected"
     }
+
+    /// "Metro · Expo · :8082 · up 3 d · no app connected"
+    var summary: String {
+        [kind, ":" + portList, "up " + Format.age(since: started), statusNote].compactMap { $0 }
+            .joined(separator: " · ")
+    }
 }
 
 struct ServerRow: View {
     @EnvironmentObject private var store: ServerStore
     let server: DevServer
-    var compact = false
+    let showDetails: (DevServer) -> Void
 
     var body: some View {
         HStack(spacing: 10) {
             StatusDot(tone: server.tone)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(server.project.name).lineLimit(1)
-                Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(server.project.name).lineLimit(1)
+                    if !server.project.subtitle.isEmpty {
+                        Text(server.project.subtitle).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+                Text(server.summary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 8)
-            if !compact {
-                Pill(text: server.kind).frame(width: 130, alignment: .leading)
-                Text(server.portList).font(.system(.body, design: .monospaced))
-                    .frame(width: 56, alignment: .leading)
-                Text(Format.age(since: server.started)).monospacedDigit()
-                    .frame(width: 44, alignment: .leading)
-            }
             ConfirmButton(title: "Stop", busy: store.stopping.contains(server.pid)) { store.stop(server) }
+            Button { showDetails(server) } label: {
+                Image(systemName: "info.circle").font(.system(size: 15))
+            }
+            .buttonStyle(.borderless)
+            .help("Details")
         }
         .padding(.vertical, 2)
         .contextMenu {
@@ -94,72 +85,84 @@ struct ServerRow: View {
                 Button("Reveal in Finder") { store.reveal(server) }
                 Button("Open in Terminal") { store.openTerminal(server) }
             }
-            Button("Copy Command") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(server.command, forType: .string)
-            }
+            Button("Copy Command") { Pasteboard.copy(server.command) }
+            Divider()
+            Button("Details…") { showDetails(server) }
         }
-    }
-
-    private var subtitle: String {
-        if compact {
-            return [server.kind + " :" + server.portList, "up " + Format.age(since: server.started), server.statusNote]
-                .compactMap { $0 }.joined(separator: " · ")
-        }
-        return [server.project.subtitle, server.statusNote].compactMap { $0 }.filter { !$0.isEmpty }
-            .joined(separator: " · ")
     }
 }
 
-struct ServerInspector: View {
+/// Everything known about one server, in a sheet like System Settings' "Details…".
+struct ServerDetails: View {
     @EnvironmentObject private var store: ServerStore
-    let server: DevServer
+    @Environment(\.dismiss) private var dismiss
+    let snapshot: DevServer
+
+    /// The live entry, so the sheet notices when the server stops.
+    private var server: DevServer? { store.servers.first { $0.id == snapshot.id } }
 
     var body: some View {
-        Form {
-            Section {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(server.project.name).font(.headline)
-                    HStack {
-                        Pill(text: server.kind)
-                        if let note = server.statusNote {
-                            Pill(text: note, tint: server.tone == .attention ? .orange : .green)
+        VStack(spacing: 0) {
+            Form {
+                Section {
+                    HStack(spacing: 12) {
+                        IconTile(symbol: "server.rack", color: .green, size: 40)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(snapshot.project.name).font(.headline)
+                            Text(server.map(\.summary) ?? "Not running")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                     }
+                    .padding(.vertical, 4)
                 }
-                HStack {
-                    if server.url != nil { Button("Open") { store.open(server) } }
-                    Spacer()
-                    ConfirmButton(title: "Stop", busy: store.stopping.contains(server.pid)) { store.stop(server) }
-                }
-            }
-            Section("Details") {
-                LabeledContent("Ports", value: server.portList)
-                LabeledContent("Running for", value: Format.age(since: server.started))
-                if let started = server.started {
-                    LabeledContent("Started", value: started.formatted(date: .abbreviated, time: .shortened))
-                }
-                LabeledContent("PID", value: String(server.pid))
-                if let apps = server.metro?.apps, !apps.isEmpty {
-                    LabeledContent("Apps", value: apps.joined(separator: "\n"))
-                }
-            }
-            if let cwd = server.cwd {
-                Section("Folder") {
-                    Text(cwd).font(.caption).textSelection(.enabled)
-                    HStack {
-                        Button("Reveal in Finder") { store.reveal(server) }
-                        Button("Terminal") { store.openTerminal(server) }
+                if let server {
+                    Section {
+                        LabeledContent("Kind", value: server.kind)
+                        LabeledContent("Ports", value: server.portList)
+                        LabeledContent("Running for", value: Format.age(since: server.started))
+                        if let started = server.started {
+                            LabeledContent("Started", value: started.formatted(date: .abbreviated, time: .shortened))
+                        }
+                        LabeledContent("PID", value: String(server.pid))
+                        if let apps = server.metro?.apps {
+                            LabeledContent("Connected apps", value: apps.isEmpty ? "None" : apps.joined(separator: "\n"))
+                        }
                     }
+                    if let cwd = server.cwd {
+                        Section("Folder") {
+                            Text(cwd).textSelection(.enabled)
+                            HStack {
+                                Spacer()
+                                Button("Reveal in Finder") { store.reveal(server) }
+                                Button("Open in Terminal") { store.openTerminal(server) }
+                            }
+                        }
+                    }
+                    Section("Command") {
+                        Text(server.command)
+                            .font(.system(.callout, design: .monospaced))
+                            .textSelection(.enabled)
+                            .lineLimit(10)
+                    }
+                } else {
+                    Section { Text("This server is no longer running.").foregroundStyle(.secondary) }
                 }
             }
-            Section("Command") {
-                Text(server.command)
-                    .font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled)
-                    .lineLimit(8)
+            .formStyle(.grouped)
+
+            HStack {
+                if let server {
+                    ConfirmButton(title: "Stop Server", busy: store.stopping.contains(server.pid)) { store.stop(server) }
+                }
+                Spacer()
+                if let server, server.url != nil {
+                    Button("Open in Browser") { store.open(server) }
+                }
+                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
             }
+            .padding([.horizontal, .bottom], 20)
         }
-        .formStyle(.grouped)
+        .frame(width: 500, height: 560)
     }
 }
