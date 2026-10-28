@@ -54,6 +54,11 @@ final class DeviceStore: ObservableObject {
     private var knownAVDs: [String: String] = [:]
 
     init() {
+        if Demo.isOn {
+            devices = Demo.devices
+            loaded = true
+            return
+        }
         Task { await refresh() }
         timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             Task { await self?.refresh() }

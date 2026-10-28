@@ -73,6 +73,13 @@ final class ResourceMonitor: ObservableObject {
         limits = Dictionary(uniqueKeysWithValues: Pool.allCases.map { ($0, stored[$0.rawValue] ?? $0.defaultLimit) })
         minFreeMemory = UserDefaults.standard.object(forKey: "minFreeMemory") as? Int ?? 15
         backgroundBuilds = UserDefaults.standard.bool(forKey: "backgroundBuilds")
+        if Demo.isOn {
+            snapshot = Demo.snapshot
+            builds = Demo.builds
+            idleDaemons = Demo.daemons
+            loaded = true
+            return
+        }
         Task { await refresh() }
         timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             Task { await self?.refresh() }
@@ -109,6 +116,7 @@ final class ResourceMonitor: ObservableObject {
     /// daemons doing their work run at background priority: efficiency cores, throttled I/O.
     /// Slower builds, a smooth Mac. Restored when the user is away or the option is off.
     private func updatePriorities() async {
+        guard !Demo.isOn else { return }
         let active = LeaseStore.secondsSinceUserInput() < 120
         var wanted: Set<Int32> = []
         if backgroundBuilds && active && !builds.isEmpty {

@@ -1,143 +1,97 @@
-# DevDeck
+<p align="center">
+  <img src="docs/images/icon.png" width="128" alt="DevDeck icon">
+</p>
 
-A macOS menu bar app for the things coding agents and dev work leave running:
-simulators and devices, dev servers, and agent sound notifications (peon-ping).
+<h1 align="center">DevDeck</h1>
 
-**Menu (click the menu bar icon)**
+<p align="center">
+  A macOS menu bar app that keeps simulators, dev servers and coding agents in check.
+</p>
 
-A native macOS menu, so it looks and behaves like the system's own.
-- Agent sounds: mute all, volume, voice pack, per-sound volume
-- Running devices: hover one for Shut Down / Stop; "Start a Device" boots a simulator or emulator
-- Running dev servers (project, kind, port, uptime): hover one for Reload Apps (Metro),
-  Stop, Open in Browser, Reveal in Finder, Open in Terminal
-- The number next to the icon is how many dev servers are running; the icon dims while
-  sounds are muted. General in the dashboard has a choice of icons.
+<p align="center">
+  <img src="docs/images/menu.png" width="330" alt="The DevDeck menu">
+  <img src="docs/images/leases.png" width="520" alt="The Leases page of the DevDeck dashboard">
+</p>
 
-**Dashboard window** (laid out like System Settings)
-- Devices: iOS simulators (boot / shut down), Android emulators (start / stop),
-  paired iPhones/iPads and adb devices
-- Dev Servers: Metro (Expo / React Native, with the apps connected to it), Vite,
-  Next.js, Storybook and other servers run by node, bun, deno, python, ruby or php;
-  agent tools such as the argent tool-server are listed separately. Reload on a Metro
-  server reloads the apps connected to it, like pressing `r` in its terminal. The ⓘ button shows
-  a server's folder, command and PID; right-click to open it in the browser, Finder or Terminal.
-- Agent Sounds, Voice Packs, Agent Apps: peon-ping settings (see below)
-- General: open at login, menu bar icon, peon-ping info
+Coding agents that build and test mobile apps boot simulators, start dev servers and kick
+off native builds, often several agents at once, on the same Mac you're working on.
+DevDeck shows what's running and lets you stop what's left over. It also tells you which
+device an agent is driving, and makes agents take turns: with you, with each other, and
+with your Mac's memory.
 
-In the dashboard, Stop and Shut Down ask for a second click to confirm. While the dashboard
-is open DevDeck acts as a regular app (Dock icon, menu bar, ⌘-Tab, ⌘1–⌘6 for the pages);
-closing it goes back to menu bar only.
+## Features
 
-## How it finds things
+- **Devices.** iOS simulators, Android emulators and connected iPhones and Android
+  phones in one list. Boot, shut down and start them from the menu.
+- **Dev servers.** Finds Metro, Vite, Next.js and other dev servers by their listening
+  ports and names them after their project. **Stop** ends the whole process tree, and
+  **Reload** reloads the apps connected to Metro, like pressing `r` in its terminal.
+- **Agent activity.** See which simulator or device a Claude Code agent is driving, and
+  what it last did. The device turns purple.
+- **Device leases.** **Hold** a device, **take it over** from an agent, or **join the
+  queue** for it. Agents wait for you, and for each other. An agent that finds a device
+  busy is sent to a free one of the same kind.
+- **On-device markers.** A small companion app shows who's driving a simulator in the
+  Dynamic Island (a Live Activity), or as a silent notification on Android emulators.
+- **Resources.** Limits on booted simulators, emulators, native builds and dev servers,
+  plus a low-memory check: agents wait for room instead of grinding your Mac to a halt.
+  It also stops idle Gradle and Kotlin daemons, and can run builds at background
+  priority while you're at the Mac.
+- **Agent sounds.** Volume, voice packs and per-sound settings for
+  [peon-ping](https://github.com/PeonPing/peon-ping), if you use it.
+- **Native.** A real macOS menu and a dashboard laid out like System Settings, with
+  Liquid Glass on macOS 26.
 
-- Devices: `xcrun simctl`, `xcrun devicectl`, `adb` and `emulator` (Android SDK at
-  `$ANDROID_HOME` or `~/Library/Android/sdk`). Refreshed every 5 seconds; physical
-  iOS devices every 15.
-- Dev servers: listening TCP ports from `lsof`, owned by a script runtime, excluding
-  runtimes bundled inside apps (editor helpers, Electron backends). The project name
-  is the git repo the server runs in (worktrees are named too). Metro is recognized
-  by its `/status` endpoint, and `/json/list` gives the connected apps.
-- Reload sends a `reload` broadcast on Metro's `/message` WebSocket, which is what
-  pressing `r` in the Metro terminal does. Works with both Expo and React Native CLI.
-- Stop sends SIGTERM to the server, its child processes and the wrappers that launched
-  it (`npm run`, `npx`, `yarn`, `pnpm`, `sh -c`), and SIGKILL to anything still alive
-  after 3 seconds. The shell, terminal or agent above the wrappers is left alone, and so
-  is DevDeck itself.
+## Screenshots
 
-## Agent activity
+| Devices | Resources |
+|---|---|
+| ![Devices](docs/images/devices.png) | ![Resources](docs/images/resources.png) |
 
-DevDeck shows which simulator or device a coding agent is driving: the device turns
-purple, with the agent, its last action and the project ("Claude Code · gesture-tap 12 s
-ago · my-app"), so you know to leave it alone. Turn it on per agent in
-General → Agent Activity (or `open -a DevDeck --args --hooks claude,codex`).
+| Dev Servers | Device markers in the Dynamic Island |
+|---|---|
+| ![Dev Servers](docs/images/servers.png) | ![An agent driving the simulator, then the user holding it](docs/images/marker-ios.png) |
 
-- It adds `PreToolUse`, `Stop` and `SessionEnd` hooks to `~/.claude/settings.json` and
-  `~/.codex/hooks.json`. They run `devdeck-hook` (inside the app), which sends argent
-  tool calls and `xcrun simctl` / `adb` / `emulator` commands to a socket in
-  `~/Library/Application Support/DevDeck`. Codex skips new or changed hooks until you
-  trust them in `/hooks`.
-- A device counts as driven until the agent has been idle on it for 10 minutes, its
-  session ends, or the device is shut down.
+## Requirements
 
-**Holding a device.** From a device's menu (or the button on its row in the dashboard):
+- macOS 26 or later, and Xcode 26 or later to build it.
+- Optional: the Android SDK for emulators and Android devices,
+  [Claude Code](https://claude.com/claude-code) for agent activity and leases,
+  [argent](https://github.com/software-mansion/argent) (DevDeck understands its device
+  tools), and [peon-ping](https://github.com/PeonPing/peon-ping) for agent sounds.
 
-- **Hold Device** keeps agents off a free device. **Take Over Now** does the same for
-  one an agent is driving. An agent's next call on a held device waits until you
-  **Release** it, or until you've been away from the Mac (no keyboard or mouse input)
-  for 10 minutes (General → Release my holds).
-- **Join Queue** makes the device yours as soon as the agent is done with it: its turn
-  ends, its session ends, or it's idle for 10 minutes. DevDeck sends a notification.
-- A call waits up to 9 minutes; then it's refused and the agent is told the device is
-  in use and which devices are free.
-- If DevDeck isn't running (or crashes), nothing waits.
-
-**Agents sharing devices.** An agent keeps a device while it works. Another agent's
-calls on it wait until the first agent's turn ends, its session ends, or it's been quiet
-for 2 minutes. If a free simulator or emulator of the same kind is running, the second
-agent is turned away at once and told to use that one instead. Your holds and your place
-in the queue come before any agent. Subagents count as their parent session.
-
-The **Leases** page in the dashboard shows each device's holder and the line waiting for
-it, with Take Over, Release, Move to Front (let a waiting call go next) and Turn Away (the
-agent is told the device is in use).
-- Scripts can do the same over the socket, one JSON line per connection:
-  `{"command": "hold" | "release" | "queue" | "leave", "device": "<udid or serial>"}`,
-  `{"command": "front" | "run" | "dismiss", "waiter": "<id from status>"}` or `{"command": "status"}`.
-
-**Keeping the Mac responsive.** Heavy work an agent starts waits for room. Each kind
-has a limit, set on the **Resources** page: booted iOS simulators (2), running Android
-emulators (1), native builds (1: `xcodebuild`, Gradle builds, `expo run`,
-`react-native run-*`, local EAS builds) and dev servers (3: `expo start`, `npm run dev`,
-Vite, Next.js…). While memory is low (below 15% free by default, or macOS reports memory
-pressure), nothing heavy starts. DevDeck counts what's actually running, your own work
-included, but only agents are held back. A call that gets through reserves its room for
-a minute, until its process shows up. The Resources page also shows the Mac's load,
-lists calls waiting for room (Run Now, Turn Away), stops idle Gradle and Kotlin daemons,
-and can run builds at background priority while you're at the Mac.
-
-**Device markers.** DevDeck also shows it on the device, through a small DevDeck
-companion app (see `helpers/`) that it installs when an agent first drives a simulator
-or emulator:
-
-- iOS simulators: a Live Activity in the Dynamic Island, with a chip and "Claude" while
-  an agent drives it, and an empty island otherwise. iOS only lets an app start a Live
-  Activity from the front, so DevDeck starts it right after a simulator boots (the
-  companion opens and steps back to the home screen). For a simulator that was already
-  running, use "Start Device Marker" in its menu.
-- Android emulators: a silent notification with a small status bar icon, which you can
-  swipe away.
-- Physical devices get no marker. Turn markers off in General → Agent Activity, or on
-  the device in the DevDeck companion.
-
-## Agent sounds
-
-DevDeck reads and writes peon-ping's own `config.json` and `.paused` files, so changes
-made with the `peon` CLI show up in the app and the other way round. Per-sound volume
-and per-client control need a `peon.sh` that supports `category_volumes` /
-`disabled_clients`; with an older one those controls are disabled. Set
-`CLAUDE_PEON_DIR` to point the app at a different peon-ping data directory.
-
-peon-ping is optional. Without it (no `peon.sh` in its data directory) the Agent Sounds
-menu section and the three sound pages are hidden, and they appear on their own once
-peon-ping is installed.
-
-## Build
-
-Requires Xcode (or its command line tools).
+## Build and install
 
 ```bash
-bash scripts/build-app.sh            # builds build/DevDeck.app
-bash scripts/build-app.sh --install  # also copies it to ~/Applications and launches it
-swift test                           # scanner and stop logic, including a real server
+git clone https://github.com/michalsek/devdeck.git
+cd devdeck
+bash scripts/build-app.sh --install   # builds DevDeck.app, copies it to ~/Applications and opens it
 ```
 
-Requires macOS 26 or later, and must be built with its SDK or newer: apps linked against
-an older SDK run in compatibility mode, without the current menu and sidebar materials.
+The first build also builds the companion apps, so it takes a few minutes. To keep macOS
+from asking for folder access again after every rebuild, sign with your development
+certificate; see [docs/development.md](docs/development.md#signing).
 
-To open a window at launch (handy for screenshots), pass `--open`:
+## Getting started
 
-```bash
-open ~/Applications/DevDeck.app --args --open dashboard:servers   # pages: devices, servers, sounds, packs, clients, general
-```
+1. Click the menu bar icon for devices, dev servers and resources at a glance. The
+   number next to the icon is how many dev servers are running.
+2. Choose **Open Dashboard…** (⌘,) for everything else.
+3. Turn on **General → Agent Activity → Claude Code**. DevDeck adds hooks to
+   `~/.claude/settings.json`, and from then on devices that agents drive are marked.
+   If DevDeck isn't running, the hooks do nothing.
+4. To keep agents off a device, choose **Hold Device** in its menu, or **Take Over** on
+   one an agent is using. Release it when you're done; your hold also ends after you've
+   been away from the Mac for a while.
+5. Set the limits for heavy work on the **Resources** page.
 
-The menu bar icons are filled icons from [Tabler Icons](https://tabler.io/icons) (MIT).
+Codex hooks work the same way but are experimental; Codex asks you to trust them in
+`/hooks`.
+
+## Learn more
+
+- [How it works](docs/how-it-works.md): how DevDeck finds things, the lease and queue
+  rules, resource limits, device markers and the socket scripts can use.
+- [Development](docs/development.md): building, signing, tests, demo mode and the
+  project layout.
+- [Companion apps](helpers/README.md): the iOS and Android marker apps.

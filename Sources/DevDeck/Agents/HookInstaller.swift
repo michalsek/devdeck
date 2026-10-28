@@ -15,7 +15,7 @@ final class HookInstaller: ObservableObject {
         refresh()
         // The app may have moved, or this version wants different hooks; bring them up to
         // date. Only from an app bundle, so a debug run doesn't take the hooks over.
-        guard Bundle.main.bundleURL.pathExtension == "app" else { return }
+        guard Bundle.main.bundleURL.pathExtension == "app", !Demo.isOn else { return }
         for agent in installed where !isCurrent(agent) {
             Self.log.info("\(agent.rawValue, privacy: .public): hooks out of date, updating")
             set(agent, enabled: true)

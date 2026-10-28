@@ -73,6 +73,7 @@ final class MarkerController {
         self.leases = leases
         self.devices = devices
         self.settings = settings
+        guard !Demo.isOn else { return }
         subscription = Publishers.CombineLatest3(leases.$book, devices.$devices, settings.$deviceMarkers)
             .debounce(for: .milliseconds(300), scheduler: DispatchQueue.main)
             .sink { [weak self] _, _, _ in self?.reconcile() }

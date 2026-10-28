@@ -31,6 +31,10 @@ final class LeaseStore: ObservableObject {
         self.settings = settings
         self.servers = servers
         self.monitor = monitor
+        if Demo.isOn {
+            book = Demo.book()
+            return
+        }
         openSocket()
         timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
