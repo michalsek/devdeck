@@ -63,7 +63,15 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-codesign --force --sign - "$APP" >/dev/null
+# macOS keeps privacy approvals (Documents, Music, ...) per code signature. Ad-hoc
+# signing changes with every build, so each build asks again; a real certificate keeps
+# them. Put DEVDECK_SIGN_IDENTITY=<name or SHA-1 from `security find-identity -v -p
+# codesigning`> in .signing (git-ignored) or the environment.
+[ -f "$REPO/.signing" ] && source "$REPO/.signing"
+IDENTITY="${DEVDECK_SIGN_IDENTITY:--}"
+[ "$IDENTITY" = "-" ] && echo "Note: signing ad hoc, so macOS will ask for folder access again after each build (see .signing)." >&2
+codesign --force --sign "$IDENTITY" "$APP/Contents/MacOS/devdeck-hook" >/dev/null
+codesign --force --sign "$IDENTITY" "$APP" >/dev/null
 echo "Built $APP"
 
 if [ "${1:-}" = "--install" ]; then
