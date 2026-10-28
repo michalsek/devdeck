@@ -45,6 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = mainMenu()
+        leases.openPage = { [unowned self] page in dashboard.show(page) }
         peon.$installed.removeDuplicates()
             .sink { [unowned self] installed in updatePageItems(peonInstalled: installed) }
             .store(in: &subscriptions)
@@ -210,6 +211,10 @@ final class AppSettings: ObservableObject {
     @Published var holdReleaseMinutes: Int {
         didSet { UserDefaults.standard.set(holdReleaseMinutes, forKey: "holdReleaseMinutes") }
     }
+    /// Post a notification when an agent's call has to wait.
+    @Published var notifyWaits: Bool {
+        didSet { UserDefaults.standard.set(notifyWaits, forKey: "notifyWaits") }
+    }
     /// Show who drives a simulator or emulator on the device, through the companion app.
     @Published var deviceMarkers: Bool {
         didSet { UserDefaults.standard.set(deviceMarkers, forKey: "deviceMarkers") }
@@ -219,6 +224,7 @@ final class AppSettings: ObservableObject {
         menuBarIcon = UserDefaults.standard.string(forKey: "menuBarIcon").flatMap(MenuBarIcon.init) ?? .dashboard
         deviceMarkers = UserDefaults.standard.object(forKey: "deviceMarkers") as? Bool ?? true
         holdReleaseMinutes = UserDefaults.standard.object(forKey: "holdReleaseMinutes") as? Int ?? 10
+        notifyWaits = UserDefaults.standard.object(forKey: "notifyWaits") as? Bool ?? true
     }
 
     func setLaunchAtLogin(_ value: Bool) {

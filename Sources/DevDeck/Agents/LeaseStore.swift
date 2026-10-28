@@ -1,6 +1,6 @@
 import CoreGraphics
 import Foundation
-import UserNotifications
+import os
 
 /// The broker: receives agent hook calls from `devdeck-hook`, decides with `LeaseBook`
 /// whether each may run now or has to wait for the user, and answers the hook.
@@ -8,6 +8,7 @@ import UserNotifications
 @MainActor
 final class LeaseStore: ObservableObject {
     typealias Lease = LeaseBook.Lease
+    private static let log = Logger(subsystem: "dev.devdeck.app", category: "broker")
 
     /// How long a call may wait when the hook doesn't say (it asks for less than its timeout).
     static let defaultMaxWait: TimeInterval = 9 * 60
@@ -25,6 +26,11 @@ final class LeaseStore: ObservableObject {
     /// one is turned away; the book forgets them by then).
     private var connections: [UUID: BrokerConnection] = [:]
     private var pending: [UUID: LeaseBook.Waiter] = [:]
+    /// Waiting calls the user has been told about.
+    private var notified: Set<UUID> = []
+    let notifier = Notifier()
+    /// Opens a dashboard page (a click on a notification).
+    var openPage: ((DashboardPage) -> Void)?
 
     init(devices: DeviceStore, settings: AppSettings, servers: ServerStore, monitor: ResourceMonitor) {
         self.devices = devices
@@ -34,6 +40,15 @@ final class LeaseStore: ObservableObject {
         if Demo.isOn {
             book = Demo.book()
             return
+        }
+        notifier.setUp()
+        notifier.onOpen = { [weak self] page in self?.openPage?(page) }
+        notifier.onAction = { [weak self] action, id in
+            guard let self, let waiter = book.waiters.first(where: { $0.id == id }) else { return }
+            switch action {
+            case .letThrough: runNow(waiter)
+            case .turnAway: dismiss(waiter)
+            }
         }
         openSocket()
         timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
@@ -69,7 +84,6 @@ final class LeaseStore: ObservableObject {
 
     func joinQueue(_ device: DeviceItem) {
         book.joinQueue(key(for: device), now: .now)
-        Self.requestNotificationPermission()
     }
 
     func leaveQueue(_ device: DeviceItem) {
@@ -154,11 +168,16 @@ final class LeaseStore: ObservableObject {
                 since: now, deadline: now.addingTimeInterval(maxWait),
                 pools: event.pools.filter { !(booting.contains($0) && alreadyRunning) })
             updateResources()
-            switch book.request(waiter, alternatives: alternatives(for: waiter.touched), now: now) {
+            let decision = book.request(
+                waiter, alternatives: alternatives(for: waiter.touched), running: runningOfSameKind(booting: waiter), now: now)
+            Self.log.info("\(session.label, privacy: .public) \(waiter.action, privacy: .public) \(waiter.devices, privacy: .public) \(waiter.pools.map(\.rawValue), privacy: .public) → \(String(describing: decision), privacy: .public)")
+            switch decision {
             case .allow:
                 connection.respond(["decision": "allow"])
             case .redirect(let free):
                 connection.respond(["decision": "deny", "reason": redirectReason(waiter, free: free)])
+            case .useRunning(let free):
+                connection.respond(["decision": "deny", "reason": useRunningReason(waiter, free: free)])
             case .wait:
                 connections[waiter.id] = connection
                 pending[waiter.id] = waiter
@@ -223,7 +242,22 @@ final class LeaseStore: ObservableObject {
     private func hungUp(_ waiter: UUID) {
         connections[waiter] = nil
         pending[waiter] = nil
+        notified.remove(waiter)
+        notifier.clear(waiter)
         book.cancel(waiter)
+    }
+
+    /// For a call that boots a simulator or emulator: the ones of that kind already running.
+    private func runningOfSameKind(booting waiter: LeaseBook.Waiter) -> [String] {
+        let kind: DeviceItem.Kind
+        if waiter.pools.contains(.iosSimulator) {
+            kind = .simulator
+        } else if waiter.pools.contains(.androidEmulator) {
+            kind = .emulator
+        } else {
+            return []
+        }
+        return devices.running.filter { $0.kind == kind && !waiter.devices.contains($0.id) }.map(\.id)
     }
 
     /// Other running simulators or emulators of the same kind and platform, per device.
@@ -289,6 +323,38 @@ final class LeaseStore: ObservableObject {
         carryOut(book.tick(
             now: .now, running: running, userAway: Self.secondsSinceUserInput(),
             userHoldTimeout: minutes > 0 ? TimeInterval(minutes * 60) : nil))
+        notifyWaiting()
+    }
+
+    /// Tells the user about calls that have waited a few seconds (quick hand-offs aren't news).
+    private func notifyWaiting() {
+        guard settings.notifyWaits else { return }
+        for waiter in book.waiters where !notified.contains(waiter.id) && Date.now.timeIntervalSince(waiter.since) >= 3 {
+            notified.insert(waiter.id)
+            notifier.waiting(
+                waiter.id, title: "\(waiter.session.label) is waiting",
+                body: "\(describe(waiter)): \(waitReason(waiter)).", page: page(for: waiter))
+        }
+    }
+
+    /// "boot-device on iPhone 18 Pro" or "npx expo run:ios"
+    private func describe(_ waiter: LeaseBook.Waiter) -> String {
+        waiter.devices.isEmpty ? waiter.action : "\(waiter.action) on \(devicesNamed(waiter))"
+    }
+
+    /// Why a call waits: "you're holding iPhone 17", "Codex · web is using Pixel 9", or room.
+    private func waitReason(_ waiter: LeaseBook.Waiter) -> String {
+        let blocked = waiter.touched.filter { book.isBlocked($0, for: waiter.session, now: .now) }
+        guard !blocked.isEmpty else { return roomProblem(waiter) }
+        let names = blocked.map(name(of:)).joined(separator: ", ")
+        if blocked.contains(where: book.isHeldByUser) { return "you're holding \(names)" }
+        if blocked.contains(where: book.queue.contains) { return "you're next in line for \(names)" }
+        let agents = blocked.compactMap { book.leases[$0]?.holder.session?.label }
+        return "\(agents.first ?? "another agent") is using \(names)"
+    }
+
+    private func page(for waiter: LeaseBook.Waiter) -> DashboardPage {
+        waiter.touched.contains { book.isBlocked($0, for: waiter.session, now: .now) } ? .leases : .resources
     }
 
     /// Time since the last keyboard, mouse or trackpad input anywhere on the Mac.
@@ -302,10 +368,21 @@ final class LeaseStore: ObservableObject {
     private func carryOut(_ effects: LeaseBook.Effects) {
         for id in effects.allowed {
             pending[id] = nil
+            if notified.remove(id) != nil { notifier.clear(id) }
             connections.removeValue(forKey: id)?.respond(["decision": "allow"])
         }
         for denial in effects.denied {
             let waiter = pending.removeValue(forKey: denial.waiter)
+            if notified.remove(denial.waiter) != nil {
+                if denial.reason == .timedOut, let waiter {
+                    notifier.gaveUp(
+                        denial.waiter, title: "\(waiter.session.label) stopped waiting",
+                        body: "\(describe(waiter)) wasn't run: \(waitReason(waiter)). The agent was told why.",
+                        page: page(for: waiter))
+                } else {
+                    notifier.clear(denial.waiter)
+                }
+            }
             connections.removeValue(forKey: denial.waiter)?.respond([
                 "decision": "deny", "reason": denyReason(waiter, denial.reason),
             ])
@@ -375,16 +452,20 @@ final class LeaseStore: ObservableObject {
             + " or wait and try this device again later. IDs: \(free.joined(separator: ", "))."
     }
 
-    private func notifyHandedOver(_ deviceID: String) {
-        let name = devices.devices.first { $0.id == deviceID || $0.serial == deviceID }?.name ?? "The device"
-        let content = UNMutableNotificationContent()
-        content.title = "\(name) is yours"
-        content.body = "The agent is done with it. Agents wait until you release it in DevDeck."
-        UNUserNotificationCenter.current().add(
-            UNNotificationRequest(identifier: "handover-\(deviceID)", content: content, trigger: nil))
+    /// What the agent reads when it would boot a device while one of the same kind is free.
+    private func useRunningReason(_ waiter: LeaseBook.Waiter, free: [String]) -> String {
+        let names = free.map(name(of:))
+        let first = names[0]
+        return "DevDeck: \(names.count == 1 ? "\(first) is" : names.joined(separator: ", ") + " are") already running"
+            + " and nobody is using \(names.count == 1 ? "it" : "them"), so booting \(devicesNamed(waiter)) was not run"
+            + " (each simulator or emulator takes a few GB of memory). Use \(first) instead (ID \(free[0]))."
+            + " If you need \(devicesNamed(waiter)) specifically, run the same command again within 5 minutes"
+            + " and DevDeck will let it through."
     }
 
-    private static func requestNotificationPermission() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    private func notifyHandedOver(_ deviceID: String) {
+        notifier.plain(
+            "handover-\(deviceID)", title: "\(name(of: deviceID)) is yours",
+            body: "The agent is done with it. Agents wait until you release it in DevDeck.", page: .leases)
     }
 }

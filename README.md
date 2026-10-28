@@ -30,7 +30,9 @@ with your Mac's memory.
   what it last did. The device turns purple.
 - **Device leases.** **Hold** a device, **take it over** from an agent, or **join the
   queue** for it. Agents wait for you, and for each other. An agent that finds a device
-  busy is sent to a free one of the same kind.
+  busy, or wants to boot another simulator while one is free, is sent to the free one.
+- **Notifications.** When an agent has to wait, a notification says which one and why,
+  with **Let Through** and **Turn Away** buttons. The menu bar icon counts waiting calls.
 - **On-device markers.** A small companion app shows who's driving a simulator in the
   Dynamic Island (a Live Activity), or as a silent notification on Android emulators.
 - **Resources.** Limits on booted simulators, emulators, native builds and dev servers,
@@ -95,3 +97,7 @@ Codex hooks work the same way but are experimental; Codex asks you to trust them
 - [Development](docs/development.md): building, signing, tests, demo mode and the
   project layout.
 - [Companion apps](helpers/README.md): the iOS and Android marker apps.
+
+## License
+
+[MIT](LICENSE)

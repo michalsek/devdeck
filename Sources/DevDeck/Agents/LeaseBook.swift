@@ -87,6 +87,9 @@ struct LeaseBook {
         var agentIdle: TimeInterval = 10 * 60
         /// Another agent may take a lease whose holder has been idle this long.
         var handoff: TimeInterval = 2 * 60
+        /// A boot turned away in favour of a running device goes through if asked again
+        /// within this long: the agent needs that particular device.
+        var insist: TimeInterval = 5 * 60
     }
 
     enum Decision: Equatable {
@@ -94,6 +97,9 @@ struct LeaseBook {
         case wait
         /// Turned away at once: the devices are busy, these free ones can be used instead.
         case redirect([String])
+        /// Turned away at once: it would boot a device while these of the same kind are
+        /// running and free. Asking again within `Timing.insist` boots it anyway.
+        case useRunning([String])
     }
 
     enum DenyReason: Equatable { case timedOut, dismissed }
@@ -124,6 +130,8 @@ struct LeaseBook {
     var timing = Timing()
     var resources = Resources()
     private(set) var reservations: [Reservation] = []
+    /// Boots turned away in favour of a running device: "session|device" → when.
+    private(set) var suggested: [String: Date] = [:]
     private(set) var leases: [String: Lease] = [:]
     /// Devices the user is queued for.
     private(set) var queue: Set<String> = []
@@ -171,7 +179,22 @@ struct LeaseBook {
 
     /// An agent call on `waiter.devices` (and done with `waiter.releases`).
     /// `alternatives` lists, per device, other running devices of the same kind.
-    mutating func request(_ waiter: Waiter, alternatives: [String: [String]] = [:], now: Date) -> Decision {
+    /// `running` lists, for a call that boots a device, running devices of the same kind.
+    mutating func request(
+        _ waiter: Waiter, alternatives: [String: [String]] = [:], running: [String] = [], now: Date
+    ) -> Decision {
+        // Booting another simulator while one of the same kind is running and free: use that
+        // one, unless the agent asks again (it needs this particular device).
+        let free = running.filter { !isBlocked($0, for: waiter.session, now: now) && !queue.contains($0) }
+        if !free.isEmpty, let device = waiter.devices.first {
+            let key = waiter.session.id + "|" + device
+            if let asked = suggested[key], now.timeIntervalSince(asked) < timing.insist {
+                suggested[key] = nil
+            } else {
+                suggested[key] = now
+                return .useRunning(free)
+            }
+        }
         let blocked = waiter.touched.filter { isBlocked($0, for: waiter.session, now: now) }
         if blocked.isEmpty {
             if needsRoom(waiter, now: now) {
@@ -309,6 +332,7 @@ struct LeaseBook {
         }
         queue = queue.filter(running.contains)
         reservations.removeAll { $0.until <= now }
+        suggested = suggested.filter { now.timeIntervalSince($0.value) < timing.insist }
         let expired = waiters.filter { $0.deadline <= now }
         waiters.removeAll { $0.deadline <= now }
         effects.denied += expired.map { Denial(waiter: $0.id, reason: .timedOut) }

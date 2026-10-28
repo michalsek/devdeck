@@ -57,9 +57,23 @@ aren't tied to a device, but they do count as builds (see Resources).
   wait until you **Release** it, or until you've been away from the Mac (no keyboard or
   mouse input) for 10 minutes; see General → Release my holds. **Join Queue** makes a
   device yours as soon as the agent is done with it, and DevDeck sends a notification.
+- **Use what's running.** An agent that boots a simulator or emulator while one of the
+  same kind is running and free is turned away at once and told to use that one: each
+  takes a few GB of memory. If it repeats the same boot within 5 minutes, DevDeck lets it
+  through, since it needs that particular device.
 - A call waits up to 9 minutes. Then it's turned away, and the agent reads why and which
   devices are free. On the **Leases** page you can also let a waiting call go next
   (**Move to Front**) or turn it away now (**Turn Away**).
+
+## Notifications
+
+When an agent's call has waited a few seconds, DevDeck posts a notification: which agent,
+what it wanted and why it waits ("you're holding iPhone 17", "2 iOS simulators are
+running (limit 2)"). **Let Through** runs it now, **Turn Away** tells the agent the
+device or the Mac is busy, and a click opens the Leases or Resources page. The
+notification goes away when the call runs, and says so if the call gives up. The menu
+bar icon shows an hourglass with the number of waiting calls. Turn notifications off in
+General → Agent Activity.
 
 ## Resources
 
@@ -73,7 +87,8 @@ Heavy work an agent starts waits for room. Each kind has a limit, set on the
 | Native builds | 1 | `xcodebuild`, Gradle builds, `expo run`, `react-native run-*`, `npm run ios`/`android`, local EAS builds |
 | Dev servers | 3 | `expo start`, `npm`/`yarn`/`pnpm`/`bun` `start`/`dev`, Vite, Next.js, Storybook, Metro |
 
-While free memory is below 15% (or macOS reports memory pressure), nothing heavy starts.
+While free memory is below 15% (or macOS reports critical memory pressure), nothing heavy
+starts.
 DevDeck counts what's actually running, your own work included, but only agents are
 held back. A call that gets through reserves its room for a minute, until its process
 shows up. **Run Now** on the Resources page lets a waiting call start anyway.

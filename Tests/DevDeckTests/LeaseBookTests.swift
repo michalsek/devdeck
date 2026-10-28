@@ -170,6 +170,33 @@ final class LeaseBookTests: XCTestCase {
         XCTAssertTrue(book.queue.isEmpty)
     }
 
+    func testBootingAnotherSimulatorSuggestsTheFreeOneUntilAskedAgain() {
+        var book = LeaseBook()
+        let boot = LeaseBook.Waiter(
+            id: UUID(), session: claude, action: "boot-device", devices: ["new-sim"], releases: [],
+            since: start, deadline: start + 540, pools: [.iosSimulator])
+        XCTAssertEqual(book.request(boot, running: ["old-sim"], now: start), .useRunning(["old-sim"]))
+        // Asking again within 5 minutes means it needs that one.
+        XCTAssertEqual(book.request(boot, running: ["old-sim"], now: start + 60), .allow)
+        // Much later, it's suggested again.
+        XCTAssertEqual(book.request(boot, running: ["old-sim"], now: start + 1000), .useRunning(["old-sim"]))
+    }
+
+    func testBootingIsNotRedirectedToBusySimulators() {
+        var book = LeaseBook()
+        _ = book.request(call(codex, "old-sim"), now: start)
+        book.hold("other-sim", now: start)
+        let boot = LeaseBook.Waiter(
+            id: UUID(), session: claude, action: "boot-device", devices: ["new-sim"], releases: [],
+            since: start + 5, deadline: start + 545, pools: [.iosSimulator])
+        XCTAssertEqual(book.request(boot, running: ["old-sim", "other-sim"], now: start + 5), .allow)
+        // Its own simulator counts as free for it.
+        let again = LeaseBook.Waiter(
+            id: UUID(), session: codex, action: "boot-device", devices: ["third-sim"], releases: [],
+            since: start + 6, deadline: start + 546, pools: [.iosSimulator])
+        XCTAssertEqual(book.request(again, running: ["old-sim"], now: start + 6), .useRunning(["old-sim"]))
+    }
+
     func testCancelledWaiterIsForgotten() {
         var book = LeaseBook()
         book.hold("sim", now: start)

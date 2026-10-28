@@ -53,7 +53,7 @@ struct ResourcesView: View {
                     ForEach([10, 15, 20, 25, 30], id: \.self) { Text("Below \($0)% free").tag($0) }
                 } label: {
                     Text("Hold heavy work when memory is low")
-                    Text("Also while macOS reports memory pressure")
+                    Text("Also while macOS reports critical memory pressure")
                 }
                 Toggle(isOn: $monitor.backgroundBuilds) {
                     Text("Run builds at background priority while you're at the Mac")

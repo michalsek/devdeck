@@ -53,7 +53,9 @@ final class StatusMenu: NSObject, NSMenuDelegate {
     private func updateButton(paused: Bool, count: Int, icon: MenuBarIcon, driven: Int, held: Int, waiting: Int) {
         guard let button = item.button else { return }
         button.image = icon.image()
-        button.title = count > 0 ? "\(count)" : ""
+        // Waiting agent calls show as an hourglass and their number.
+        button.title = [count > 0 ? "\(count)" : nil, waiting > 0 ? "⏳\(waiting)" : nil]
+            .compactMap { $0 }.joined(separator: " ")
         // Muted: the icon dims, like a menu extra that's switched off.
         button.appearsDisabled = paused
         let summary = "\(count) dev server\(count == 1 ? "" : "s") running"

@@ -86,7 +86,9 @@ final class ResourceMonitor: ObservableObject {
         }
     }
 
-    var memoryLow: Bool { minFreeMemory > 0 && (snapshot.memoryFree < minFreeMemory || snapshot.pressure >= 2) }
+    /// macOS reports "warning" pressure often while plenty is still free, so only critical
+    /// pressure counts on its own.
+    var memoryLow: Bool { minFreeMemory > 0 && (snapshot.memoryFree < minFreeMemory || snapshot.pressure >= 4) }
 
     func refresh() async {
         guard !scanning else { return }

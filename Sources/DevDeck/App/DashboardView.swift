@@ -247,6 +247,10 @@ private struct AgentHooksSection: View {
                 Text("Release my holds")
                 Text("When you hold a device, agents wait. Your hold ends when you release it, or after this long without keyboard or mouse input on the Mac.")
             }
+            Toggle(isOn: $app.notifyWaits) {
+                Text("Notify me when an agent has to wait")
+                Text("A notification says which agent waits and why, with Let Through and Turn Away buttons")
+            }
             Toggle(isOn: $app.deviceMarkers) {
                 Text("Show a marker on the device")
                 Text("Installs the DevDeck companion on simulators and emulators an agent drives: a Live Activity in the Dynamic Island, or a silent notification on Android")
