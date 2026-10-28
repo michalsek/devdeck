@@ -9,6 +9,13 @@ import SwiftUI
 enum DevDeckMain {
     static func main() {
         MainActor.assumeIsolated {
+            // One DevDeck at a time: a second copy would take over the agents' socket.
+            let others = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
+                .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
+            if let running = others.first {
+                running.activate()
+                return
+            }
             let app = NSApplication.shared
             let delegate = AppDelegate()
             app.delegate = delegate
@@ -24,7 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let devices = DeviceStore()
     let servers = ServerStore()
     let settings = AppSettings()
-    lazy var leases = LeaseStore(devices: devices)
+    lazy var leases = LeaseStore(devices: devices, settings: settings)
     let hooks = HookInstaller()
     lazy var markers = MarkerController(leases: leases, devices: devices, settings: settings)
 
@@ -198,6 +205,10 @@ final class AppSettings: ObservableObject {
     @Published var menuBarIcon: MenuBarIcon {
         didSet { UserDefaults.standard.set(menuBarIcon.rawValue, forKey: "menuBarIcon") }
     }
+    /// Your hold on a device ends after this many minutes without input on the Mac; 0 never.
+    @Published var holdReleaseMinutes: Int {
+        didSet { UserDefaults.standard.set(holdReleaseMinutes, forKey: "holdReleaseMinutes") }
+    }
     /// Show who drives a simulator or emulator on the device, through the companion app.
     @Published var deviceMarkers: Bool {
         didSet { UserDefaults.standard.set(deviceMarkers, forKey: "deviceMarkers") }
@@ -206,6 +217,7 @@ final class AppSettings: ObservableObject {
     init() {
         menuBarIcon = UserDefaults.standard.string(forKey: "menuBarIcon").flatMap(MenuBarIcon.init) ?? .dashboard
         deviceMarkers = UserDefaults.standard.object(forKey: "deviceMarkers") as? Bool ?? true
+        holdReleaseMinutes = UserDefaults.standard.object(forKey: "holdReleaseMinutes") as? Int ?? 10
     }
 
     func setLaunchAtLogin(_ value: Bool) {

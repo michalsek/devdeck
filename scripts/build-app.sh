@@ -70,6 +70,8 @@ if [ "${1:-}" = "--install" ]; then
   DEST="$HOME/Applications/DevDeck.app"
   mkdir -p "$HOME/Applications"
   pkill -x DevDeck 2>/dev/null || true
+  # Let the old copy exit first, or `open` may just bring it back to the front.
+  for _ in $(seq 1 50); do pgrep -x DevDeck >/dev/null || break; sleep 0.1; done
   rm -rf "$DEST"
   cp -R "$APP" "$DEST"
   open "$DEST"

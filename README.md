@@ -51,14 +51,29 @@ purple, with the agent, its last action and the project ("Claude Code · gesture
 ago · my-app"), so you know to leave it alone. Turn it on per agent in
 General → Agent Activity (or `open -a DevDeck --args --hooks claude,codex`).
 
-- It adds async `PreToolUse` and `SessionEnd` hooks to `~/.claude/settings.json` and
-  `~/.codex/hooks.json`. They run `devdeck-hook` (inside the app), which forwards argent
+- It adds `PreToolUse`, `Stop` and `SessionEnd` hooks to `~/.claude/settings.json` and
+  `~/.codex/hooks.json`. They run `devdeck-hook` (inside the app), which sends argent
   tool calls and `xcrun simctl` / `adb` / `emulator` commands to a socket in
-  `~/Library/Application Support/DevDeck`. Codex skips new hooks until you trust them
-  in `/hooks`.
-- The hooks never block or slow an agent, and do nothing while DevDeck isn't running.
+  `~/Library/Application Support/DevDeck`. Codex skips new or changed hooks until you
+  trust them in `/hooks`.
 - A device counts as driven until the agent has been idle on it for 10 minutes, its
-  session ends, or the device is shut down. Nothing is enforced yet.
+  session ends, or the device is shut down.
+
+**Holding a device.** From a device's menu (or the button on its row in the dashboard):
+
+- **Hold Device** keeps agents off a free device. **Take Over Now** does the same for
+  one an agent is driving. An agent's next call on a held device waits until you
+  **Release** it, or until you've been away from the Mac (no keyboard or mouse input)
+  for 10 minutes (General → Release my holds).
+- **Join Queue** makes the device yours as soon as the agent is done with it: its turn
+  ends, its session ends, or it's idle for 10 minutes. DevDeck sends a notification.
+- A call waits up to 9 minutes; then it's refused and the agent is told the device is
+  in use and which devices are free.
+- If DevDeck isn't running (or crashes), nothing waits. Agents don't wait for each other
+  yet: the most recent agent to act on a device takes it.
+- Scripts can do the same over the socket, one JSON line per connection:
+  `{"command": "hold" | "release" | "queue" | "leave", "device": "<udid or serial>"}` or
+  `{"command": "status"}`.
 
 **Device markers.** DevDeck also shows it on the device, through a small DevDeck
 companion app (see `helpers/`) that it installs when an agent first drives a simulator

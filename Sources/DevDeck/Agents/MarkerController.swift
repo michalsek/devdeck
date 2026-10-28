@@ -24,10 +24,15 @@ struct MarkerState: Codable, Equatable {
     }
 
     init(lease: LeaseStore.Lease) {
-        self.init(
-            state: "agent", holder: lease.session.agent.title, host: lease.session.host,
-            project: lease.session.project.name, action: lease.lastActionName,
-            since: Int(lease.since.timeIntervalSince1970))
+        let since = Int(lease.since.timeIntervalSince1970)
+        switch lease.holder {
+        case .agent(let session):
+            self.init(
+                state: "agent", holder: session.agent.title, host: session.host,
+                project: session.project.name, action: lease.lastActionName, since: since)
+        case .user:
+            self.init(state: "user", holder: "You", since: since)
+        }
     }
 
     /// Whether the device needs telling. The last action changes on every call, so it
@@ -61,12 +66,14 @@ final class MarkerController {
     private var seenStopped: Set<String> = []
     /// Simulators that booted while DevDeck was watching and still need their marker started.
     private var pendingStart: Set<String> = []
+    /// Every device seen so far; nil until the first device list arrives.
+    private var known: Set<String>?
 
     init(leases: LeaseStore, devices: DeviceStore, settings: AppSettings) {
         self.leases = leases
         self.devices = devices
         self.settings = settings
-        subscription = Publishers.CombineLatest3(leases.$leases, devices.$devices, settings.$deviceMarkers)
+        subscription = Publishers.CombineLatest3(leases.$book, devices.$devices, settings.$deviceMarkers)
             .debounce(for: .milliseconds(300), scheduler: DispatchQueue.main)
             .sink { [weak self] _, _, _ in self?.reconcile() }
     }
@@ -89,7 +96,14 @@ final class MarkerController {
     }
 
     private func reconcile() {
+        guard devices.loaded else { return }
+        // A simulator that shows up already running was created and booted just now.
+        let firstLook = known == nil
+        defer { known = (known ?? []).union(devices.devices.map(\.markerKey)) }
         for device in devices.devices where device.kind != .physical {
+            if !firstLook, known?.contains(device.markerKey) == false, device.isRunning, device.kind == .simulator {
+                pendingStart.insert(device.markerKey)
+            }
             if !device.isRunning {
                 seenStopped.insert(device.markerKey)
                 sent[device.markerKey] = nil

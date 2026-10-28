@@ -1,19 +1,25 @@
 import Foundation
+import os
 
 /// Adds and removes DevDeck's hooks in Claude Code's settings.json and Codex's hooks.json.
 /// Both use the same shape; entries are recognized by the `devdeck-hook` command, and
 /// everything else in the file is left as it was.
 @MainActor
 final class HookInstaller: ObservableObject {
+    private static let log = Logger(subsystem: "dev.devdeck.app", category: "hooks")
+
     @Published private(set) var installed: Set<AgentKind> = []
     @Published private(set) var lastError: String?
 
     init() {
         refresh()
-        // The app may have moved since the hooks were installed; point them at this copy.
-        // Only from an app bundle, so a debug run doesn't take the hooks over.
+        // The app may have moved, or this version wants different hooks; bring them up to
+        // date. Only from an app bundle, so a debug run doesn't take the hooks over.
         guard Bundle.main.bundleURL.pathExtension == "app" else { return }
-        for agent in installed where !hasCurrentCommand(agent) { set(agent, enabled: true) }
+        for agent in installed where !isCurrent(agent) {
+            Self.log.info("\(agent.rawValue, privacy: .public): hooks out of date, updating")
+            set(agent, enabled: true)
+        }
     }
 
     /// Whether the agent is set up on this Mac (its config folder exists).
@@ -23,13 +29,16 @@ final class HookInstaller: ObservableObject {
 
     func set(_ agent: AgentKind, enabled: Bool) {
         let url = Self.configURL(agent)
-        let events = try? JSONSerialization.data(withJSONObject: Self.events)
+        let events = try? JSONSerialization.data(withJSONObject: Self.hooks.map {
+            ["event": $0.event, "matcher": $0.matcher, "async": $0.async, "timeout": $0.timeout]
+        })
         Task {
             let result = await Shell.run("/usr/bin/env", [
                 "python3", "-I", "-c", Self.editScript, url.path, Self.command(agent), enabled ? "1" : "0",
                 String(decoding: events ?? Data(), as: UTF8.self),
             ])
             lastError = result.ok ? nil : "\(agent.title) hooks: " + result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+            Self.log.info("\(agent.rawValue, privacy: .public): hooks \(enabled ? "installed" : "removed", privacy: .public), status \(result.status)")
             refresh()
         }
     }
@@ -40,10 +49,19 @@ final class HookInstaller: ObservableObject {
 
     // MARK: - Config
 
-    /// Hook events and matchers. Async, so they never delay the agent.
-    static let events: [String: String] = [
-        "PreToolUse": "mcp__argent__.*|Bash",
-        "SessionEnd": "",
+    struct Hook: Hashable {
+        let event: String
+        let matcher: String
+        let async: Bool
+        let timeout: Int
+    }
+
+    /// `PreToolUse` waits for DevDeck's answer (the helper gives up after 540 s, under the
+    /// timeout); the others only report, in the background.
+    static let hooks: [Hook] = [
+        Hook(event: "PreToolUse", matcher: "mcp__argent__.*|Bash", async: false, timeout: 600),
+        Hook(event: "Stop", matcher: "", async: true, timeout: 3),
+        Hook(event: "SessionEnd", matcher: "", async: true, timeout: 3),
     ]
 
     static func configURL(_ agent: AgentKind) -> URL {
@@ -59,27 +77,44 @@ final class HookInstaller: ObservableObject {
         }
     }
 
-    /// The helper ships next to the app's executable. `|| true` keeps the hook harmless
-    /// if DevDeck is deleted.
+    /// The helper ships next to the app's executable. If DevDeck is deleted the hook does
+    /// nothing; otherwise the helper's exit code (2 blocks the call) and message pass through.
     static func command(_ agent: AgentKind) -> String {
         let helper = Bundle.main.executableURL!.deletingLastPathComponent().appendingPathComponent("devdeck-hook")
         let quoted = "'" + helper.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
-        return "\(quoted) \(agent.rawValue) 2>/dev/null || true"
+        return "test -x \(quoted) || exit 0; exec \(quoted) \(agent.rawValue)"
     }
 
-    private func hasCurrentCommand(_ agent: AgentKind) -> Bool {
-        commands(in: Self.configURL(agent)).allSatisfy { $0 == Self.command(agent) }
+    /// Whether the installed hooks are exactly the ones this copy of DevDeck wants.
+    private func isCurrent(_ agent: AgentKind) -> Bool {
+        let installed = installedHooks(in: Self.configURL(agent))
+        return installed.count == Self.hooks.count
+            && Set(installed.map(\.hook)) == Set(Self.hooks)
+            && installed.allSatisfy { $0.command == Self.command(agent) }
     }
 
     private func commands(in url: URL) -> [String] {
+        installedHooks(in: url).map(\.command)
+    }
+
+    private func installedHooks(in url: URL) -> [(hook: Hook, command: String)] {
         guard let data = try? Data(contentsOf: url),
               let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let hooks = json["hooks"] as? [String: Any]
+              let events = json["hooks"] as? [String: Any]
         else { return [] }
-        return hooks.values.compactMap { $0 as? [[String: Any]] }.joined()
-            .compactMap { $0["hooks"] as? [[String: Any]] }.joined()
-            .compactMap { $0["command"] as? String }
-            .filter { $0.contains("devdeck-hook") }
+        var found: [(Hook, String)] = []
+        for (event, groups) in events {
+            for group in groups as? [[String: Any]] ?? [] {
+                for handler in group["hooks"] as? [[String: Any]] ?? [] {
+                    guard let command = handler["command"] as? String, command.contains("devdeck-hook") else { continue }
+                    let hook = Hook(
+                        event: event, matcher: group["matcher"] as? String ?? "",
+                        async: handler["async"] as? Bool ?? false, timeout: handler["timeout"] as? Int ?? 0)
+                    found.append((hook, command))
+                }
+            }
+        }
+        return found
     }
 
     /// argv: path, command, "1" to install / "0" to remove, events JSON.
@@ -105,9 +140,11 @@ final class HookInstaller: ObservableObject {
         else:
             del hooks[event]
     if install:
-        for event, matcher in events.items():
-            hooks.setdefault(event, []).append({'matcher': matcher, 'hooks': [
-                {'type': 'command', 'command': command, 'timeout': 3, 'async': True}]})
+        for hook in events:
+            handler = {'type': 'command', 'command': command, 'timeout': hook['timeout']}
+            if hook['async']:
+                handler['async'] = True
+            hooks.setdefault(hook['event'], []).append({'matcher': hook['matcher'], 'hooks': [handler]})
     if hooks:
         cfg['hooks'] = hooks
     else:

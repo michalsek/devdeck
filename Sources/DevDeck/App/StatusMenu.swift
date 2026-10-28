@@ -39,17 +39,18 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         item.menu = menu
         item.button?.imagePosition = .imageLeading
 
-        Publishers.CombineLatest4(peon.$paused, servers.$servers, settings.$menuBarIcon, leases.$leases)
+        Publishers.CombineLatest4(peon.$paused, servers.$servers, settings.$menuBarIcon, leases.$book)
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] paused, servers, icon, leases in
+            .sink { [weak self] paused, servers, icon, book in
                 self?.updateButton(
                     paused: paused, count: servers.filter { $0.group == .devServer }.count, icon: icon,
-                    driven: leases.count)
+                    driven: book.leases.values.filter { !$0.isUser }.count,
+                    held: book.leases.values.filter(\.isUser).count, waiting: book.waiters.count)
             }
             .store(in: &subscriptions)
     }
 
-    private func updateButton(paused: Bool, count: Int, icon: MenuBarIcon, driven: Int) {
+    private func updateButton(paused: Bool, count: Int, icon: MenuBarIcon, driven: Int, held: Int, waiting: Int) {
         guard let button = item.button else { return }
         button.image = icon.image()
         button.title = count > 0 ? "\(count)" : ""
@@ -57,6 +58,8 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         button.appearsDisabled = paused
         let summary = "\(count) dev server\(count == 1 ? "" : "s") running"
             + (driven > 0 ? ", \(driven) device\(driven == 1 ? "" : "s") driven by agents" : "")
+            + (held > 0 ? ", \(held) held by you" : "")
+            + (waiting > 0 ? ", \(waiting) agent call\(waiting == 1 ? "" : "s") waiting" : "")
             + (paused ? ", sounds muted" : "")
         button.toolTip = "DevDeck: " + summary
         button.setAccessibilityLabel("DevDeck, " + summary)
@@ -122,17 +125,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
                 .joined(separator: " · ")
             row.image = .statusDot(.systemGreen)
             let actions = NSMenu()
-            if let lease = leases.lease(for: device) {
-                // Driven by an agent: say who, so the device is left alone.
-                row.subtitle = "\(lease.session.agent.title) · \(Format.age(since: lease.lastAction)) ago · \(lease.session.project.name)"
-                row.image = .statusDot(.systemPurple)
-                let driver = disabled("Driven by \(lease.session.agentDescription)")
-                driver.subtitle = [lease.session.project.name, lease.session.project.subtitle, lease.lastActionName]
-                    .filter { !$0.isEmpty }.joined(separator: " · ")
-                actions.addItem(driver)
-                actions.addItem(ActionItem("Forget This Agent") { [leases] in leases.forget(device) })
-                actions.addItem(.separator())
-            }
+            addLease(of: device, to: actions, row: row)
             if device.canStop {
                 actions.addItem(devices.busy.contains(device.id)
                     ? disabled("Shutting Down…")
@@ -203,6 +196,52 @@ final class StatusMenu: NSObject, NSMenuDelegate {
             row.submenu = actions
             menu.addItem(row)
         }
+    }
+
+    /// Who holds the device, and the hold / take over / queue / release actions.
+    private func addLease(of device: DeviceItem, to actions: NSMenu, row: NSMenuItem) {
+        let queued = leases.isQueued(for: device)
+        switch leases.lease(for: device)?.holder {
+        case .agent(let session):
+            let lease = leases.lease(for: device)!
+            // Driven by an agent: say who, so the device is left alone.
+            row.subtitle = "\(session.agent.title) · \(Format.age(since: lease.lastAction)) ago · \(session.project.name)"
+                + (queued ? " · you're next" : "")
+            row.image = .statusDot(.systemPurple)
+            let driver = disabled("Driven by \(session.agentDescription)")
+            driver.subtitle = [session.project.name, session.project.subtitle, lease.lastActionName]
+                .filter { !$0.isEmpty }.joined(separator: " · ")
+            actions.addItem(driver)
+            let takeOver = ActionItem("Take Over Now") { [leases] in leases.hold(device) }
+            takeOver.subtitle = "The agent waits until you release it"
+            actions.addItem(takeOver)
+            if queued {
+                actions.addItem(ActionItem("Leave Queue") { [leases] in leases.leaveQueue(device) })
+            } else {
+                let join = ActionItem("Join Queue") { [leases] in leases.joinQueue(device) }
+                join.subtitle = "Yours when the agent is done with it"
+                actions.addItem(join)
+            }
+            actions.addItem(ActionItem("Forget This Agent") { [leases] in leases.forget(device) })
+        case .user:
+            let waiting = leases.waiters(for: device)
+            row.subtitle = "Held by you" + (waiting.isEmpty ? "" : " · \(waiting.count) agent call\(waiting.count == 1 ? "" : "s") waiting")
+            row.image = .statusDot(.systemBlue)
+            let header = disabled("Held by You")
+            header.subtitle = "Agents wait until you release it"
+            actions.addItem(header)
+            for waiter in waiting {
+                let item = disabled("Waiting: \(waiter.session.label)")
+                item.subtitle = "\(waiter.action) · \(Format.age(since: waiter.since))"
+                actions.addItem(item)
+            }
+            actions.addItem(ActionItem("Release") { [leases] in leases.release(device) })
+        case nil:
+            let hold = ActionItem("Hold Device") { [leases] in leases.hold(device) }
+            hold.subtitle = "Agents wait until you release it"
+            actions.addItem(hold)
+        }
+        actions.addItem(.separator())
     }
 
     private func disabled(_ title: String) -> NSMenuItem {

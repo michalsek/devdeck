@@ -59,13 +59,16 @@ struct DeviceRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            StatusDot(tone: lease != nil ? .agent : device.isRunning ? .running : .off)
+            StatusDot(tone: lease.map { $0.isUser ? .user : .agent } ?? (device.isRunning ? .running : .off))
             VStack(alignment: .leading, spacing: 2) {
                 Text(device.name).lineLimit(1)
                 Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                if let lease { AgentLine(lease: lease) }
+                if let lease {
+                    LeaseLine(lease: lease, waiting: leases.waiters(for: device), queued: leases.isQueued(for: device))
+                }
             }
             Spacer(minLength: 8)
+            if device.isRunning { LeaseButton(device: device) }
             Text(device.stateLabel)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -75,7 +78,7 @@ struct DeviceRow: View {
         .padding(.vertical, 2)
         .contextMenu {
             Button("Copy ID") { Pasteboard.copy(device.serial ?? device.id) }
-            if lease != nil { Button("Forget This Agent") { leases.forget(device) } }
+            if lease?.isUser == false { Button("Forget This Agent") { leases.forget(device) } }
         }
     }
 
@@ -105,20 +108,74 @@ struct DeviceRow: View {
     }
 }
 
-/// "Claude Code · gesture-tap 12 s ago · my-app", under a device an agent is driving.
-private struct AgentLine: View {
+/// Hold a free device, take over (or queue for) one an agent drives, or release yours.
+private struct LeaseButton: View {
+    @EnvironmentObject private var leases: LeaseStore
+    let device: DeviceItem
+
+    var body: some View {
+        switch leases.lease(for: device)?.holder {
+        case .agent:
+            let queued = leases.isQueued(for: device)
+            Menu("Take Over") {
+                Button("Take Over Now") { leases.hold(device) }
+                if queued {
+                    Button("Leave Queue") { leases.leaveQueue(device) }
+                } else {
+                    Button("Join Queue") { leases.joinQueue(device) }
+                }
+                Divider()
+                Button("Forget This Agent") { leases.forget(device) }
+            } primaryAction: {
+                leases.hold(device)
+            }
+            .fixedSize()
+            .help("Take it now and make agents wait, or join the queue to get it when the agent is done")
+        case .user:
+            Button("Release") { leases.release(device) }
+                .help("Let waiting agents use it again")
+        case nil:
+            Button("Hold") { leases.hold(device) }
+                .help("Keep agents off this device until you release it")
+        }
+    }
+}
+
+/// Under a device someone holds: "Claude Code · gesture-tap 12 s ago · my-app", or
+/// "Held by you · 2 agent calls waiting".
+private struct LeaseLine: View {
     let lease: LeaseStore.Lease
+    let waiting: [LeaseBook.Waiter]
+    let queued: Bool
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             HStack(spacing: 4) {
-                Image(systemName: "cpu")
-                Text("\(lease.session.agent.title) · \(lease.lastActionName) \(Format.age(since: lease.lastAction, now: context.date)) ago · \(lease.session.project.name)")
+                switch lease.holder {
+                case .agent(let session):
+                    Image(systemName: "cpu")
+                    Text("\(session.agent.title) · \(lease.lastActionName) \(Format.age(since: lease.lastAction, now: context.date)) ago · \(session.project.name)"
+                        + (queued ? " · you're next" : ""))
+                case .user:
+                    Image(systemName: "person.fill")
+                    Text("Held by you for \(Format.age(since: lease.since, now: context.date))"
+                        + (waiting.isEmpty ? "" : " · \(waiting.count) agent call\(waiting.count == 1 ? "" : "s") waiting"))
+                }
             }
         }
         .font(.caption)
-        .foregroundStyle(.purple)
+        .foregroundStyle(lease.isUser ? Color.blue : Color.purple)
         .lineLimit(1)
-        .help("Driven by \(lease.session.agentDescription). Leave it alone until the agent is done.")
+        .help(help)
+    }
+
+    private var help: String {
+        switch lease.holder {
+        case .agent(let session):
+            "Driven by \(session.agentDescription). Leave it alone until the agent is done."
+        case .user:
+            (["Agents wait until you release it."] + waiting.map { "Waiting: \($0.session.label) (\($0.action))" })
+                .joined(separator: "\n")
+        }
     }
 }

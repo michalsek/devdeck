@@ -29,7 +29,7 @@ enum DeviceTarget: Hashable {
 /// One agent hook call forwarded by `devdeck-hook`, reduced to what DevDeck shows:
 /// which session touched which device, with what.
 struct HookEvent: Equatable {
-    enum Kind: Equatable { case toolUse, sessionEnd }
+    enum Kind: Equatable { case toolUse, turnEnd, sessionEnd }
 
     let kind: Kind
     let agent: AgentKind
@@ -54,9 +54,9 @@ struct HookEvent: Equatable {
         host = json["host"] as? String
 
         switch json["hook_event_name"] as? String {
-        case "SessionEnd":
-            kind = .sessionEnd
-            action = "session ended"
+        case "SessionEnd", "Stop":
+            kind = json["hook_event_name"] as? String == "Stop" ? .turnEnd : .sessionEnd
+            action = kind == .turnEnd ? "turn ended" : "session ended"
             targets = []
             releases = []
         case "PreToolUse":

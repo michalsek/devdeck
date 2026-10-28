@@ -15,9 +15,9 @@ enum Format {
 }
 
 /// Status dot used in every list: green running, orange needs a look, purple driven by
-/// an agent, grey off.
+/// an agent, blue held by you, grey off.
 struct StatusDot: View {
-    enum Tone { case running, attention, agent, off }
+    enum Tone { case running, attention, agent, user, off }
     let tone: Tone
 
     var body: some View {
@@ -32,6 +32,7 @@ struct StatusDot: View {
         case .running: .green
         case .attention: .orange
         case .agent: .purple
+        case .user: .blue
         case .off: .secondary.opacity(0.5)
         }
     }

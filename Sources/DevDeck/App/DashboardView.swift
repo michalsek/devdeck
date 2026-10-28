@@ -227,6 +227,13 @@ private struct AgentHooksSection: View {
                 }
                 .disabled(!hooks.isAvailable(agent))
             }
+            Picker(selection: $app.holdReleaseMinutes) {
+                ForEach([5, 10, 15, 30], id: \.self) { Text("After \($0) min away").tag($0) }
+                Text("Never").tag(0)
+            } label: {
+                Text("Release my holds")
+                Text("When you hold a device, agents wait. Your hold ends when you release it, or after this long without keyboard or mouse input on the Mac.")
+            }
             Toggle(isOn: $app.deviceMarkers) {
                 Text("Show a marker on the device")
                 Text("Installs the DevDeck companion on simulators and emulators an agent drives: a Live Activity in the Dynamic Island, or a silent notification on Android")
@@ -235,7 +242,7 @@ private struct AgentHooksSection: View {
             Text("Agent Activity")
         } footer: {
             Text(leases.listening
-                ? "Agents report which simulator or device they're driving, and DevDeck marks it in purple. The hooks run in the background and never slow an agent down. Codex skips new hooks until you trust them in /hooks."
+                ? "Agents report which simulator or device they're driving, and DevDeck marks it in purple. When you hold a device, an agent's next call on it waits (up to 9 minutes) until you release it. If DevDeck isn't running, nothing waits. Codex skips new or changed hooks until you trust them in /hooks."
                 : "DevDeck couldn't open its socket, so agent activity isn't shown.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
