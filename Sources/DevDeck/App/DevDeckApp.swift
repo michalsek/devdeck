@@ -26,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let settings = AppSettings()
     lazy var leases = LeaseStore(devices: devices)
     let hooks = HookInstaller()
+    lazy var markers = MarkerController(leases: leases, devices: devices, settings: settings)
 
     private var statusMenu: StatusMenu?
     private var pageItems: [DashboardPage: NSMenuItem] = [:]
@@ -41,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &subscriptions)
         statusMenu = StatusMenu(
             peon: peon, devices: devices, servers: servers, settings: settings, leases: leases, hooks: hooks,
+            markers: markers,
             openDashboard: { [unowned self] page in dashboard.show(page) })
         handleLaunchArguments()
     }
@@ -196,9 +198,14 @@ final class AppSettings: ObservableObject {
     @Published var menuBarIcon: MenuBarIcon {
         didSet { UserDefaults.standard.set(menuBarIcon.rawValue, forKey: "menuBarIcon") }
     }
+    /// Show who drives a simulator or emulator on the device, through the companion app.
+    @Published var deviceMarkers: Bool {
+        didSet { UserDefaults.standard.set(deviceMarkers, forKey: "deviceMarkers") }
+    }
 
     init() {
         menuBarIcon = UserDefaults.standard.string(forKey: "menuBarIcon").flatMap(MenuBarIcon.init) ?? .dashboard
+        deviceMarkers = UserDefaults.standard.object(forKey: "deviceMarkers") as? Bool ?? true
     }
 
     func setLaunchAtLogin(_ value: Bool) {

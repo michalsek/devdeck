@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Material 3 roles (dark). -->
+    <color name="primary">#FF73DB8C</color>
+    <color name="on_primary">#FF00391A</color>
+    <color name="primary_container">#FF0F5228</color>
+    <color name="on_primary_container">#FFB6F2C4</color>
+    <color name="secondary_container">#FF3A4B3D</color>
+    <color name="on_secondary_container">#FFD3E8D6</color>
+    <color name="surface">#FF101411</color>
+    <color name="surface_container_highest">#FF323632</color>
+</resources>

@@ -17,6 +17,21 @@ cp "$BIN" "$APP/Contents/MacOS/DevDeck"
 # Agent hooks call this helper (see Sources/devdeck-hook).
 cp "$(dirname "$BIN")/devdeck-hook" "$APP/Contents/MacOS/devdeck-hook"
 
+# Companion apps that show device markers (see helpers/). Built when missing;
+# REBUILD_COMPANIONS=1 forces a rebuild. DevDeck works without them.
+COMPANIONS="$APP/Contents/Resources/Companions"
+mkdir -p "$COMPANIONS"
+IOS_COMPANION="$REPO/helpers/ios/build/DevDeckCompanion.app"
+ANDROID_COMPANION="$REPO/helpers/android/build/devdeck-companion.apk"
+if [ -n "${REBUILD_COMPANIONS:-}" ] || [ ! -d "$IOS_COMPANION" ]; then
+  bash "$REPO/helpers/ios/build.sh" >/dev/null || echo "Warning: iOS companion didn't build" >&2
+fi
+if [ -n "${REBUILD_COMPANIONS:-}" ] || [ ! -f "$ANDROID_COMPANION" ]; then
+  bash "$REPO/helpers/android/build.sh" >/dev/null || echo "Warning: Android companion didn't build" >&2
+fi
+[ -d "$IOS_COMPANION" ] && cp -R "$IOS_COMPANION" "$COMPANIONS/"
+[ -f "$ANDROID_COMPANION" ] && cp "$ANDROID_COMPANION" "$COMPANIONS/"
+
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 swift "$REPO/scripts/make-icon.swift" "$WORK/icon.png"

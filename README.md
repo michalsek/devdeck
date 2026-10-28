@@ -60,6 +60,20 @@ General → Agent Activity (or `open -a DevDeck --args --hooks claude,codex`).
 - A device counts as driven until the agent has been idle on it for 10 minutes, its
   session ends, or the device is shut down. Nothing is enforced yet.
 
+**Device markers.** DevDeck also shows it on the device, through a small DevDeck
+companion app (see `helpers/`) that it installs when an agent first drives a simulator
+or emulator:
+
+- iOS simulators: a Live Activity in the Dynamic Island, with a chip and "Claude" while
+  an agent drives it, and an empty island otherwise. iOS only lets an app start a Live
+  Activity from the front, so DevDeck starts it right after a simulator boots (the
+  companion opens and steps back to the home screen). For a simulator that was already
+  running, use "Start Device Marker" in its menu.
+- Android emulators: a silent notification with a small status bar icon, which you can
+  swipe away.
+- Physical devices get no marker. Turn markers off in General → Agent Activity, or on
+  the device in the DevDeck companion.
+
 ## Agent sounds
 
 DevDeck reads and writes peon-ping's own `config.json` and `.paused` files, so changes

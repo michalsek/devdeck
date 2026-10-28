@@ -49,13 +49,18 @@ final class LeaseStore: ObservableObject {
         }
     }
 
-    func lease(for device: DeviceItem) -> Lease? { leases[device.id] }
+    /// An emulator is listed by its adb serial until its AVD name is known, so a lease
+    /// taken in that window is under the serial.
+    func lease(for device: DeviceItem) -> Lease? {
+        leases[device.id] ?? device.serial.flatMap { leases[$0] }
+    }
 
     /// Leases on devices that are still running, newest action first.
     var active: [Lease] { leases.values.sorted { $0.lastAction > $1.lastAction } }
 
     func forget(_ device: DeviceItem) {
         leases[device.id] = nil
+        if let serial = device.serial { leases[serial] = nil }
     }
 
     private func receive(_ data: Data) {

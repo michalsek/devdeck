@@ -211,6 +211,7 @@ struct GeneralView: View {
 
 /// Turns the agent hooks on and off. They tell DevDeck which device each agent is driving.
 private struct AgentHooksSection: View {
+    @EnvironmentObject private var app: AppSettings
     @EnvironmentObject private var hooks: HookInstaller
     @EnvironmentObject private var leases: LeaseStore
 
@@ -225,6 +226,10 @@ private struct AgentHooksSection: View {
                         : "Not installed")
                 }
                 .disabled(!hooks.isAvailable(agent))
+            }
+            Toggle(isOn: $app.deviceMarkers) {
+                Text("Show a marker on the device")
+                Text("Installs the DevDeck companion on simulators and emulators an agent drives: a Live Activity in the Dynamic Island, or a silent notification on Android")
             }
         } header: {
             Text("Agent Activity")

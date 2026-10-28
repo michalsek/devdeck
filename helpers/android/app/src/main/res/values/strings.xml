@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DevDeck</string>
+    <string name="home_subtitle">Companion for the DevDeck menu bar app</string>
+
+    <!-- Notification channel -->
+    <string name="channel_marker_name">Device marker</string>
+    <string name="channel_marker_description">Shows whether a coding agent or you are using this device right now.</string>
+
+    <!-- Marker texts (notification and home screen) -->
+    <string name="marker_agent_title">%1$s is driving this device</string>
+    <string name="marker_agent_default_holder">A coding agent</string>
+    <string name="marker_user_title_you">You hold this device</string>
+    <string name="marker_user_title">%1$s holds this device</string>
+    <string name="marker_free_title">Nobody is using this device</string>
+    <string name="marker_unknown_title">No state from DevDeck yet</string>
+    <string name="marker_detail_host">via %1$s</string>
+    <string name="marker_detail_action">last: %1$s</string>
+    <string name="marker_agent_hint">Leave it alone while the agent works.</string>
+    <string name="marker_user_hint">DevDeck marks this device as yours.</string>
+    <string name="marker_free_hint">When a coding agent or you take it, DevDeck shows a marker here.</string>
+    <string name="marker_unknown_hint">DevDeck updates this when an agent or you take this device.</string>
+
+    <!-- Status section -->
+    <string name="status_title">Right now</string>
+    <string name="status_since">Since %1$s (%2$s)</string>
+    <string name="status_note_disabled">The marker is turned off on this device.</string>
+    <string name="status_note_dismissed">You dismissed the marker; it comes back when the holder changes.</string>
+    <string name="status_note_blocked">Notifications are blocked, so the marker can\'t be shown.</string>
+
+    <!-- Marker settings section -->
+    <string name="marker_section_title">On this device</string>
+    <string name="marker_toggle">Show the marker notification</string>
+    <string name="marker_toggle_summary">A silent notification with a status bar icon: a chip when an agent drives this device, a person when you hold it.</string>
+    <string name="marker_notification_settings">Notification settings</string>
+
+    <!-- About section -->
+    <string name="about_title">What is DevDeck?</string>
+    <string name="about_body">DevDeck is a macOS menu bar app for the simulators, emulators and dev servers that coding agents such as Claude Code and Codex use. It tracks which agent is driving which device, and installed this companion so the device itself shows it. There is nothing to set up here: DevDeck sends the state over adb.</string>
+</resources>

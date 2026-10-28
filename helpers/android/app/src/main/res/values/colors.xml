@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Brand, from scripts/make-icon.swift. -->
+    <color name="brand_green">#FF73DB8C</color>
+    <color name="tile_top">#FF333D54</color>
+    <color name="tile_bottom">#FF121724</color>
+
+    <!-- Material 3 roles (light). -->
+    <color name="primary">#FF1E7A3E</color>
+    <color name="on_primary">#FFFFFFFF</color>
+    <color name="primary_container">#FFB6F2C4</color>
+    <color name="on_primary_container">#FF00210D</color>
+    <color name="secondary_container">#FFD3E8D6</color>
+    <color name="on_secondary_container">#FF0E1F13</color>
+    <color name="surface">#FFF7FAF6</color>
+    <color name="surface_container_highest">#FFE0E4DF</color>
+</resources>

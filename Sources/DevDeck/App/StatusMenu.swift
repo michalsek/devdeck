@@ -14,12 +14,13 @@ final class StatusMenu: NSObject, NSMenuDelegate {
     private let settings: AppSettings
     private let leases: LeaseStore
     private let hooks: HookInstaller
+    private let markers: MarkerController
     private let openDashboard: (DashboardPage?) -> Void
     private var subscriptions = Set<AnyCancellable>()
 
     init(
         peon: PeonStore, devices: DeviceStore, servers: ServerStore, settings: AppSettings,
-        leases: LeaseStore, hooks: HookInstaller,
+        leases: LeaseStore, hooks: HookInstaller, markers: MarkerController,
         openDashboard: @escaping (DashboardPage?) -> Void
     ) {
         self.peon = peon
@@ -28,6 +29,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         self.settings = settings
         self.leases = leases
         self.hooks = hooks
+        self.markers = markers
         self.openDashboard = openDashboard
         super.init()
 
@@ -136,6 +138,12 @@ final class StatusMenu: NSObject, NSMenuDelegate {
                     ? disabled("Shutting Down…")
                     : ActionItem(device.stopLabel) { [devices] in devices.stop(device) })
                 actions.addItem(.separator())
+            }
+            if device.kind == .simulator, settings.deviceMarkers, MarkerController.companionApp != nil {
+                // Starting the Live Activity brings the companion to the front for a moment.
+                let start = ActionItem("Start Device Marker") { [markers] in markers.startMarker(on: device) }
+                start.subtitle = "Briefly opens the DevDeck app on the simulator"
+                actions.addItem(start)
             }
             actions.addItem(ActionItem("Copy ID") { Pasteboard.copy(device.serial ?? device.id) })
             row.submenu = actions

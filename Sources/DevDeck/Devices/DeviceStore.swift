@@ -49,6 +49,9 @@ final class DeviceStore: ObservableObject {
     private var tick = 0
     /// devicectl is slow (about a second), so physical devices refresh less often.
     private var physical: [DeviceItem] = []
+    /// Emulator serial → AVD name, so an emulator keeps its id when `adb emu avd name`
+    /// is slow to answer (e.g. while adb is installing an app).
+    private var knownAVDs: [String: String] = [:]
 
     init() {
         Task { await refresh() }
@@ -69,9 +72,12 @@ final class DeviceStore: ObservableObject {
         tick += 1
 
         async let simulators = Self.scanSimulators()
-        async let android = Self.scanAndroid()
+        async let android = Self.scanAndroid(knownAVDs: knownAVDs)
         if includePhysical { physical = await Self.scanPhysicalIOS() }
         let all = await simulators + android + physical
+        for item in all where item.kind == .emulator {
+            if let serial = item.serial, let avd = item.avdName { knownAVDs[serial] = avd }
+        }
         devices = all.sorted { lhs, rhs in
             if lhs.isRunning != rhs.isRunning { return lhs.isRunning }
             return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
@@ -203,7 +209,7 @@ final class DeviceStore: ObservableObject {
         }
     }
 
-    nonisolated static func scanAndroid() async -> [DeviceItem] {
+    nonisolated static func scanAndroid(knownAVDs: [String: String] = [:]) async -> [DeviceItem] {
         async let avdsResult = Shell.run("emulator", ["-list-avds"])
         let adb = await Shell.run("adb", ["devices", "-l"])
         var items: [DeviceItem] = []
@@ -222,8 +228,13 @@ final class DeviceStore: ObservableObject {
                 let model = info["model"]?.replacingOccurrences(of: "_", with: " ")
 
                 if serial.hasPrefix("emulator-") {
-                    let avd = await Shell.run("adb", ["-s", serial, "emu", "avd", "name"], timeout: 5)
-                        .output.split(separator: "\n").first.map { $0.trimmingCharacters(in: .whitespaces) }
+                    // The console answers "Medium_Phone\r\nOK\r\n"; empty or slow means unknown.
+                    let reply = await Shell.run("adb", ["-s", serial, "emu", "avd", "name"], timeout: 5)
+                    let avd = reply.ok
+                        ? reply.output.split(whereSeparator: \.isNewline).first
+                            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                            .flatMap { $0.isEmpty ? nil : $0 } ?? knownAVDs[serial]
+                        : knownAVDs[serial]
                     if let avd { runningAVDs.insert(avd) }
                     var item = DeviceItem(
                         id: avd.map { "avd:\($0)" } ?? serial,
