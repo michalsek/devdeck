@@ -31,7 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.mainMenu = Self.mainMenu()
+        NSApp.mainMenu = mainMenu()
         statusMenu = StatusMenu(
             peon: peon, devices: devices, servers: servers, settings: settings,
             openDashboard: { [unowned self] page in dashboard.show(page) })
@@ -57,37 +57,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// The app has no visible menu bar of its own, but a main menu makes the
-    /// standard shortcuts (⌘W, ⌘Q, ⌘C/⌘V in text) work in the dashboard.
-    private static func mainMenu() -> NSMenu {
+    /// The menu bar shown while the dashboard is open (DevDeck is a regular app then).
+    private func mainMenu() -> NSMenu {
         let main = NSMenu()
-        func submenu(_ title: String, _ items: [NSMenuItem]) {
+        func submenu(_ title: String, _ items: [NSMenuItem]) -> NSMenu {
             let menu = NSMenu(title: title)
             items.forEach(menu.addItem)
             main.addItem(withTitle: title, action: nil, keyEquivalent: "").submenu = menu
+            return menu
         }
-        func item(_ title: String, _ action: Selector, _ key: String) -> NSMenuItem {
-            NSMenuItem(title: title, action: action, keyEquivalent: key)
+        func item(_ title: String, _ action: Selector, _ key: String = "",
+                  _ modifiers: NSEvent.ModifierFlags = .command) -> NSMenuItem {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+            item.keyEquivalentModifierMask = modifiers
+            return item
         }
-        submenu("DevDeck", [item("Quit DevDeck", #selector(NSApplication.terminate(_:)), "q")])
-        submenu("Edit", [
+
+        _ = submenu("DevDeck", [
+            item("About DevDeck", #selector(NSApplication.orderFrontStandardAboutPanel(_:))),
+            .separator(),
+            ActionItem("Settings…", key: ",") { [unowned self] in dashboard.show(.general) },
+            .separator(),
+            item("Hide DevDeck", #selector(NSApplication.hide(_:)), "h"),
+            item("Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option]),
+            item("Show All", #selector(NSApplication.unhideAllApplications(_:))),
+            .separator(),
+            item("Quit DevDeck", #selector(NSApplication.terminate(_:)), "q"),
+        ])
+        _ = submenu("Edit", [
+            item("Undo", Selector(("undo:")), "z"),
+            item("Redo", Selector(("redo:")), "z", [.command, .shift]),
+            .separator(),
             item("Cut", #selector(NSText.cut(_:)), "x"),
             item("Copy", #selector(NSText.copy(_:)), "c"),
             item("Paste", #selector(NSText.paste(_:)), "v"),
             item("Select All", #selector(NSText.selectAll(_:)), "a"),
         ])
-        submenu("Window", [
+        let pages = DashboardPage.allCases.enumerated().map { index, page in
+            ActionItem(page.title, key: "\(index + 1)") { [unowned self] in dashboard.show(page) }
+        }
+        _ = submenu("View", pages + [
+            .separator(),
+            item("Toggle Sidebar", #selector(NSSplitViewController.toggleSidebar(_:)), "s", [.command, .control]),
+            item("Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), "f", [.command, .control]),
+        ])
+        NSApp.windowsMenu = submenu("Window", [
             item("Minimize", #selector(NSWindow.performMiniaturize(_:)), "m"),
+            item("Zoom", #selector(NSWindow.performZoom(_:))),
             item("Close", #selector(NSWindow.performClose(_:)), "w"),
+            .separator(),
+            item("Bring All to Front", #selector(NSApplication.arrangeInFront(_:))),
         ])
         return main
     }
 }
 
 /// The dashboard window. AppKit owns it so the menu can open it at any time;
-/// SwiftUI's title and toolbar are bridged into it.
+/// SwiftUI's title and toolbar are bridged into it. While it's open DevDeck is a
+/// regular app (Dock icon, menu bar, ⌘-Tab); closing it goes back to menu bar only.
 @MainActor
-final class DashboardWindow {
+final class DashboardWindow: NSObject, NSWindowDelegate {
     private let content: () -> AnyView
     private var window: NSWindow?
 
@@ -98,8 +127,17 @@ final class DashboardWindow {
     func show(_ page: DashboardPage?) {
         if let page { UserDefaults.standard.set(page.rawValue, forKey: DashboardPage.storageKey) }
         let window = window ?? makeWindow()
+        NSApp.setActivationPolicy(.regular)
+        if window.isMiniaturized { window.deminiaturize(nil) }
         window.makeKeyAndOrderFront(nil)
-        NSApp.activate()
+        window.orderFrontRegardless()
+        // Deprecated, but the cooperative `activate()` gets declined when another app
+        // is in front, which left the window behind other windows.
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        NSApp.setActivationPolicy(.accessory)
     }
 
     private func makeWindow() -> NSWindow {
@@ -111,6 +149,7 @@ final class DashboardWindow {
         window.toolbarStyle = .unified
         window.title = "DevDeck"
         window.isReleasedWhenClosed = false
+        window.delegate = self
         window.setContentSize(NSSize(width: 860, height: 640))
         window.center()
         window.setFrameAutosaveName("DevDeckDashboard")

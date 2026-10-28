@@ -23,7 +23,9 @@ A native macOS menu, so it looks and behaves like the system's own.
 - Agent Sounds, Voice Packs, Agent Apps: peon-ping settings (see below)
 - General: open at login, menu bar icon, peon-ping info
 
-In the dashboard, Stop and Shut Down ask for a second click to confirm.
+In the dashboard, Stop and Shut Down ask for a second click to confirm. While the dashboard
+is open DevDeck acts as a regular app (Dock icon, menu bar, ⌘-Tab, ⌘1–⌘6 for the pages);
+closing it goes back to menu bar only.
 
 ## How it finds things
 
