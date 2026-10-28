@@ -69,11 +69,20 @@ General → Agent Activity (or `open -a DevDeck --args --hooks claude,codex`).
   ends, its session ends, or it's idle for 10 minutes. DevDeck sends a notification.
 - A call waits up to 9 minutes; then it's refused and the agent is told the device is
   in use and which devices are free.
-- If DevDeck isn't running (or crashes), nothing waits. Agents don't wait for each other
-  yet: the most recent agent to act on a device takes it.
+- If DevDeck isn't running (or crashes), nothing waits.
+
+**Agents sharing devices.** An agent keeps a device while it works. Another agent's
+calls on it wait until the first agent's turn ends, its session ends, or it's been quiet
+for 2 minutes. If a free simulator or emulator of the same kind is running, the second
+agent is turned away at once and told to use that one instead. Your holds and your place
+in the queue come before any agent. Subagents count as their parent session.
+
+The **Leases** page in the dashboard shows each device's holder and the line waiting for
+it, with Take Over, Release, Move to Front (let a waiting call go next) and Turn Away (the
+agent is told the device is in use).
 - Scripts can do the same over the socket, one JSON line per connection:
-  `{"command": "hold" | "release" | "queue" | "leave", "device": "<udid or serial>"}` or
-  `{"command": "status"}`.
+  `{"command": "hold" | "release" | "queue" | "leave", "device": "<udid or serial>"}`,
+  `{"command": "front" | "dismiss", "waiter": "<id from status>"}` or `{"command": "status"}`.
 
 **Device markers.** DevDeck also shows it on the device, through a small DevDeck
 companion app (see `helpers/`) that it installs when an agent first drives a simulator

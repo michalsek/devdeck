@@ -1,13 +1,14 @@
 import SwiftUI
 
 enum DashboardPage: String, Hashable, CaseIterable {
-    case devices, servers, sounds, packs, clients, general
+    case devices, leases, servers, sounds, packs, clients, general
 
     static let storageKey = "dashboardPage"
 
     var title: String {
         switch self {
         case .devices: "Devices"
+        case .leases: "Leases"
         case .servers: "Dev Servers"
         case .sounds: "Agent Sounds"
         case .packs: "Voice Packs"
@@ -19,6 +20,7 @@ enum DashboardPage: String, Hashable, CaseIterable {
     var symbol: String {
         switch self {
         case .devices: "iphone.gen3"
+        case .leases: "hand.raised.fill"
         case .servers: "server.rack"
         case .sounds: "speaker.wave.2.fill"
         case .packs: "person.wave.2.fill"
@@ -30,6 +32,7 @@ enum DashboardPage: String, Hashable, CaseIterable {
     var color: Color {
         switch self {
         case .devices: .blue
+        case .leases: .indigo
         case .servers: .green
         case .sounds: .pink
         case .packs: .orange
@@ -41,6 +44,7 @@ enum DashboardPage: String, Hashable, CaseIterable {
     var summary: String {
         switch self {
         case .devices: "Simulators, emulators and connected phones. Boot them, or shut down the ones you're done with."
+        case .leases: "Who is using each simulator and device, and who's waiting for it. Agents wait for you, and for each other."
         case .servers: "Dev servers running on this Mac, found by their listening ports. Stop the ones that are left over."
         case .sounds: "The sounds peon-ping plays when a coding agent finishes, fails or needs your input."
         case .packs: "The voice that plays agent sounds. Click a pack to use it, or the play button to hear it."
@@ -55,6 +59,7 @@ enum DashboardPage: String, Hashable, CaseIterable {
 
 struct DashboardView: View {
     @EnvironmentObject private var devices: DeviceStore
+    @EnvironmentObject private var leases: LeaseStore
     @EnvironmentObject private var servers: ServerStore
     @EnvironmentObject private var peon: PeonStore
     @AppStorage(DashboardPage.storageKey) private var storedPage: DashboardPage = .servers
@@ -67,6 +72,7 @@ struct DashboardView: View {
             List(selection: Binding(get: { page }, set: { if let value = $0 { storedPage = value } })) {
                 Section {
                     row(.devices, badge: devices.running.count)
+                    row(.leases, badge: leases.book.waiters.count)
                     row(.servers, badge: servers.devServers.count)
                 }
                 if peon.installed {
@@ -86,6 +92,7 @@ struct DashboardView: View {
             Group {
                 switch page {
                 case .devices: DevicesView()
+                case .leases: LeasesView()
                 case .servers: ServersView()
                 case .sounds: SoundsView()
                 case .packs: PacksView()

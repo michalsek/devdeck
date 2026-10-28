@@ -209,9 +209,10 @@ final class StatusMenu: NSObject, NSMenuDelegate {
                 + (queued ? " · you're next" : "")
             row.image = .statusDot(.systemPurple)
             let driver = disabled("Driven by \(session.agentDescription)")
-            driver.subtitle = [session.project.name, session.project.subtitle, lease.lastActionName]
+            driver.subtitle = [session.project.name, session.project.subtitle, lease.turnEnded ? "turn ended" : lease.lastActionName]
                 .filter { !$0.isEmpty }.joined(separator: " · ")
             actions.addItem(driver)
+            addWaiters(of: device, to: actions)
             let takeOver = ActionItem("Take Over Now") { [leases] in leases.hold(device) }
             takeOver.subtitle = "The agent waits until you release it"
             actions.addItem(takeOver)
@@ -230,11 +231,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
             let header = disabled("Held by You")
             header.subtitle = "Agents wait until you release it"
             actions.addItem(header)
-            for waiter in waiting {
-                let item = disabled("Waiting: \(waiter.session.label)")
-                item.subtitle = "\(waiter.action) · \(Format.age(since: waiter.since))"
-                actions.addItem(item)
-            }
+            addWaiters(of: device, to: actions)
             actions.addItem(ActionItem("Release") { [leases] in leases.release(device) })
         case nil:
             let hold = ActionItem("Hold Device") { [leases] in leases.hold(device) }
@@ -242,6 +239,22 @@ final class StatusMenu: NSObject, NSMenuDelegate {
             actions.addItem(hold)
         }
         actions.addItem(.separator())
+    }
+
+    /// Waiting agent calls, each with a submenu to let it go next or turn it away.
+    private func addWaiters(of device: DeviceItem, to actions: NSMenu) {
+        for (index, waiter) in leases.waiters(for: device).enumerated() {
+            let item = NSMenuItem(title: "Waiting: \(waiter.session.label)", action: nil, keyEquivalent: "")
+            item.subtitle = "\(waiter.action) · \(Format.age(since: waiter.since))"
+            item.image = NSImage(systemSymbolName: "hourglass", accessibilityDescription: "Waiting")
+            let choices = NSMenu()
+            if index > 0 { choices.addItem(ActionItem("Move to Front") { [leases] in leases.moveToFront(waiter) }) }
+            let away = ActionItem("Turn Away") { [leases] in leases.dismiss(waiter) }
+            away.subtitle = "The agent is told the device is in use"
+            choices.addItem(away)
+            item.submenu = choices
+            actions.addItem(item)
+        }
     }
 
     private func disabled(_ title: String) -> NSMenuItem {

@@ -109,7 +109,7 @@ struct DeviceRow: View {
 }
 
 /// Hold a free device, take over (or queue for) one an agent drives, or release yours.
-private struct LeaseButton: View {
+struct LeaseButton: View {
     @EnvironmentObject private var leases: LeaseStore
     let device: DeviceItem
 
@@ -154,8 +154,9 @@ private struct LeaseLine: View {
                 switch lease.holder {
                 case .agent(let session):
                     Image(systemName: "cpu")
-                    Text("\(session.agent.title) · \(lease.lastActionName) \(Format.age(since: lease.lastAction, now: context.date)) ago · \(session.project.name)"
-                        + (queued ? " · you're next" : ""))
+                    Text("\(session.agent.title) · \(lease.turnEnded ? "turn ended" : "\(lease.lastActionName) \(Format.age(since: lease.lastAction, now: context.date)) ago") · \(session.project.name)"
+                        + (queued ? " · you're next" : "")
+                        + (waiting.isEmpty ? "" : " · \(waiting.count) waiting"))
                 case .user:
                     Image(systemName: "person.fill")
                     Text("Held by you for \(Format.age(since: lease.since, now: context.date))"

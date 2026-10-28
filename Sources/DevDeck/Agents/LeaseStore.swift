@@ -9,8 +9,6 @@ import UserNotifications
 final class LeaseStore: ObservableObject {
     typealias Lease = LeaseBook.Lease
 
-    /// How long an agent keeps a device without making a call on it.
-    static let agentIdle: TimeInterval = 10 * 60
     /// How long a call may wait when the hook doesn't say (it asks for less than its timeout).
     static let defaultMaxWait: TimeInterval = 9 * 60
 
@@ -21,8 +19,10 @@ final class LeaseStore: ObservableObject {
     private let settings: AppSettings
     private var server: BrokerServer?
     private var timer: Timer?
-    /// Hook connections of waiting calls.
+    /// Hook connections of waiting calls, and the calls themselves (for the reason when
+    /// one is turned away; the book forgets them by then).
     private var connections: [UUID: BrokerConnection] = [:]
+    private var pending: [UUID: LeaseBook.Waiter] = [:]
 
     init(devices: DeviceStore, settings: AppSettings) {
         self.devices = devices
@@ -70,15 +70,25 @@ final class LeaseStore: ObservableObject {
 
     func release(_ device: DeviceItem) {
         var effects = book.release(device.id, now: .now)
-        if let serial = device.serial { merge(&effects, book.release(serial, now: .now)) }
+        if let serial = device.serial { effects.merge(book.release(serial, now: .now)) }
         carryOut(effects)
     }
 
     /// Clears an agent's lease that's clearly over.
     func forget(_ device: DeviceItem) {
         var effects = book.forget(device.id, now: .now)
-        if let serial = device.serial { merge(&effects, book.forget(serial, now: .now)) }
+        if let serial = device.serial { effects.merge(book.forget(serial, now: .now)) }
         carryOut(effects)
+    }
+
+    /// Lets a waiting agent call go next.
+    func moveToFront(_ waiter: LeaseBook.Waiter) {
+        book.moveToFront(waiter.id)
+    }
+
+    /// Turns a waiting agent call away now; the agent is told the device is in use.
+    func dismiss(_ waiter: LeaseBook.Waiter) {
+        carryOut(book.dismiss(waiter.id))
     }
 
     /// The key the device's lease is under (an emulator's may still be its serial).
@@ -94,7 +104,7 @@ final class LeaseStore: ObservableObject {
             return connection.respond(["decision": "allow"])
         }
         if let command = json["command"] as? String {
-            return connection.respond(run(command, device: json["device"] as? String))
+            return connection.respond(run(command, device: json["device"] as? String, waiter: json["waiter"] as? String))
         }
         guard let event = HookEvent(json: json) else { return connection.respond(["decision": "allow"]) }
 
@@ -116,13 +126,14 @@ final class LeaseStore: ObservableObject {
                 id: UUID(), session: session, action: event.action,
                 devices: event.targets.flatMap(resolve), releases: event.releases.flatMap(resolve),
                 since: now, deadline: now.addingTimeInterval(maxWait))
-            let (decision, effects) = book.request(waiter, now: now)
-            carryOut(effects)
-            switch decision {
+            switch book.request(waiter, alternatives: alternatives(for: waiter.touched), now: now) {
             case .allow:
                 connection.respond(["decision": "allow"])
+            case .redirect(let free):
+                connection.respond(["decision": "deny", "reason": redirectReason(waiter, free: free)])
             case .wait:
                 connections[waiter.id] = connection
+                pending[waiter.id] = waiter
                 connection.onHangup { [weak self] in
                     Task { @MainActor in self?.hungUp(waiter.id) }
                 }
@@ -131,9 +142,17 @@ final class LeaseStore: ObservableObject {
     }
 
     /// Commands for scripts, e.g. `{"command": "hold", "device": "<udid or serial>"}`:
-    /// hold, release, queue, leave, or status (no device).
-    private func run(_ command: String, device id: String?) -> [String: Any] {
+    /// hold, release, queue, leave; `front` / `dismiss` with `"waiter": "<id>"`; or status.
+    private func run(_ command: String, device id: String?, waiter: String?) -> [String: Any] {
         if command == "status" { return status() }
+        if let waiter = waiter.flatMap(UUID.init(uuidString:)).flatMap({ id in book.waiters.first { $0.id == id } }) {
+            switch command {
+            case "front": moveToFront(waiter)
+            case "dismiss": dismiss(waiter)
+            default: return ["ok": false, "error": "unknown command"]
+            }
+            return status()
+        }
         guard let id, let device = devices.devices.first(where: { $0.id == id || $0.serial == id }) else {
             return ["ok": false, "error": "unknown device"]
         }
@@ -151,18 +170,37 @@ final class LeaseStore: ObservableObject {
         let leases = book.leases.values.map { lease -> [String: Any] in
             var entry: [String: Any] = ["device": lease.deviceID, "since": lease.since.timeIntervalSince1970]
             switch lease.holder {
-            case .agent(let session): entry["holder"] = session.label
+            case .agent(let session):
+                entry["holder"] = session.label
+                entry["turnEnded"] = lease.turnEnded
             case .user: entry["holder"] = "user"
             }
             return entry
         }
-        let waiters = book.waiters.map { ["devices": $0.touched, "agent": $0.session.label, "action": $0.action] as [String: Any] }
+        let waiters = book.waiters.map {
+            ["id": $0.id.uuidString, "devices": $0.touched, "agent": $0.session.label, "action": $0.action] as [String: Any]
+        }
         return ["ok": true, "leases": leases, "queue": Array(book.queue), "waiting": waiters]
     }
 
     private func hungUp(_ waiter: UUID) {
         connections[waiter] = nil
+        pending[waiter] = nil
         book.cancel(waiter)
+    }
+
+    /// Other running simulators or emulators of the same kind and platform, per device.
+    private func alternatives(for ids: [String]) -> [String: [String]] {
+        var result: [String: [String]] = [:]
+        for id in ids {
+            guard let device = devices.devices.first(where: { $0.id == id || $0.serial == id }),
+                  device.kind != .physical
+            else { continue }
+            result[id] = devices.running
+                .filter { $0.kind == device.kind && $0.platform == device.platform && $0.id != device.id }
+                .map(\.id)
+        }
+        return result
     }
 
     /// Matches a target to DevDeck's device ids (UDID, "avd:<name>" or adb serial).
@@ -198,8 +236,7 @@ final class LeaseStore: ObservableObject {
         let running = Set(devices.running.flatMap { [$0.id] + ($0.serial.map { [$0] } ?? []) })
         let minutes = settings.holdReleaseMinutes
         carryOut(book.tick(
-            now: .now, running: running, agentIdle: Self.agentIdle,
-            userAway: Self.secondsSinceUserInput(),
+            now: .now, running: running, userAway: Self.secondsSinceUserInput(),
             userHoldTimeout: minutes > 0 ? TimeInterval(minutes * 60) : nil))
     }
 
@@ -211,36 +248,62 @@ final class LeaseStore: ObservableObject {
 
     // MARK: Effects
 
-    private func merge(_ effects: inout LeaseBook.Effects, _ other: LeaseBook.Effects) {
-        effects.allowed += other.allowed
-        effects.denied += other.denied
-        effects.handedToUser += other.handedToUser
-    }
-
     private func carryOut(_ effects: LeaseBook.Effects) {
         for id in effects.allowed {
+            pending[id] = nil
             connections.removeValue(forKey: id)?.respond(["decision": "allow"])
         }
-        for id in effects.denied {
-            connections.removeValue(forKey: id)?.respond(["decision": "deny", "reason": denyReason()])
+        for denial in effects.denied {
+            let waiter = pending.removeValue(forKey: denial.waiter)
+            connections.removeValue(forKey: denial.waiter)?.respond([
+                "decision": "deny", "reason": denyReason(waiter, denial.reason),
+            ])
         }
         for device in effects.handedToUser {
             notifyHandedOver(device)
         }
     }
 
-    /// What the agent reads when its call gave up waiting.
-    private func denyReason() -> String {
-        let held = book.leases.values.filter(\.isUser).compactMap { lease in
-            devices.devices.first { $0.id == lease.deviceID || $0.serial == lease.deviceID }?.name
-        }
-        let free = devices.running.filter { $0.kind != .physical && lease(for: $0) == nil }.map(\.name)
-        var reason = "DevDeck: the user is using "
-            + (held.isEmpty ? "this device" : held.joined(separator: ", "))
-            + " themselves, so this call waited and was not run. Don't use that device until they release it."
-        if !free.isEmpty { reason += " Devices nobody is using: \(free.joined(separator: ", "))." }
-        reason += " Work on something else or ask the user, then try again."
-        return reason
+    private func name(of id: String) -> String {
+        devices.devices.first { $0.id == id || $0.serial == id }?.name ?? id
+    }
+
+    /// Who's in the way on the devices a call wanted: "the user" or "another agent (Codex · web)".
+    private func blockers(of waiter: LeaseBook.Waiter?) -> String {
+        guard let waiter else { return "someone else" }
+        let holders = waiter.touched.compactMap { book.leases[$0]?.holder }.filter { $0.session?.id != waiter.session.id }
+        if holders.contains(.user) { return "the user" }
+        let agents = holders.compactMap(\.session?.label)
+        return agents.isEmpty ? "someone else" : "another agent (\(agents.joined(separator: ", ")))"
+    }
+
+    private func devicesNamed(_ waiter: LeaseBook.Waiter?) -> String {
+        guard let waiter, !waiter.touched.isEmpty else { return "this device" }
+        return waiter.touched.map(name(of:)).joined(separator: ", ")
+    }
+
+    /// What the agent reads when its call is turned away after waiting.
+    private func denyReason(_ waiter: LeaseBook.Waiter?, _ reason: LeaseBook.DenyReason) -> String {
+        // Free devices of the same kind as the ones it wanted.
+        let candidates = Set(alternatives(for: waiter?.touched ?? []).values.joined())
+        let free = devices.running
+            .filter { candidates.contains($0.id) && lease(for: $0) == nil && !isQueued(for: $0) }
+            .map(\.name)
+        var text = "DevDeck: \(devicesNamed(waiter)) is in use by \(blockers(of: waiter)), so this call was not run"
+        text += reason == .dismissed ? " (the user turned it away)." : " (it waited too long)."
+        text += " Don't use that device until it's free."
+        if !free.isEmpty { text += " Devices nobody is using: \(free.joined(separator: ", "))." }
+        text += " Work on something else or ask the user, then try again."
+        return text
+    }
+
+    /// What the agent reads when it's sent to a free device instead of waiting.
+    private func redirectReason(_ waiter: LeaseBook.Waiter, free: [String]) -> String {
+        let names = free.map(name(of:))
+        return "DevDeck: \(devicesNamed(waiter)) is in use by \(blockers(of: waiter)), so this call was not run."
+            + " Use \(names.count == 1 ? names[0] : "one of: " + names.joined(separator: ", ")) instead"
+            + " (\(free.count == 1 ? "it's" : "they're") the same kind and nobody is using \(free.count == 1 ? "it" : "them")),"
+            + " or wait and try this device again later. IDs: \(free.joined(separator: ", "))."
     }
 
     private func notifyHandedOver(_ deviceID: String) {
