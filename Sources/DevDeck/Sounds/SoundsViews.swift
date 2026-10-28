@@ -89,7 +89,9 @@ private struct PackRow: View {
             }
             .buttonStyle(.plain)
             .accessibilityAddTraits(selected ? [.isSelected] : [])
-            PreviewButton(large: true) { store.preview(SoundCategory.all[0], pack: pack) }
+            PreviewButton(large: true, playing: store.isPlaying(SoundCategory.all[0], pack: pack)) {
+                store.togglePreview(SoundCategory.all[0], pack: pack)
+            }
         }
         .padding(.vertical, 2)
     }

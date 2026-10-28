@@ -30,23 +30,26 @@ struct CommitSlider: View {
     }
 }
 
-/// Plays a sample. Large on the dashboard pages, small in the menu.
+/// Plays a sample, and turns into a pause button while it plays (clicking it stops).
+/// Large on the dashboard pages, small in the menu.
 struct PreviewButton: View {
     var large = false
+    let playing: Bool
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: large ? "play.circle.fill" : "play.circle")
+            Image(systemName: (playing ? "pause.circle" : "play.circle") + (large ? ".fill" : ""))
                 .font(.system(size: large ? 24 : 13))
+                .contentTransition(.symbolEffect(.replace))
                 .symbolRenderingMode(.hierarchical)
                 .foregroundStyle(large ? Color.accentColor : .secondary)
                 .frame(width: large ? 30 : 18, height: large ? 30 : 18)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.borderless)
-        .help("Play a sample")
-        .accessibilityLabel("Play a sample")
+        .help(playing ? "Stop" : "Play a sample")
+        .accessibilityLabel(playing ? "Stop" : "Play a sample")
     }
 }
 
@@ -103,7 +106,7 @@ struct CategoryRow: View {
     }
 
     private var preview: some View {
-        PreviewButton(large: showsDetail) { store.preview(category) }
+        PreviewButton(large: showsDetail, playing: store.isPlaying(category)) { store.togglePreview(category) }
             .disabled(!enabled || (store.activePack?.sounds[category.id]?.isEmpty ?? true))
     }
 }

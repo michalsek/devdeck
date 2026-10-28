@@ -22,6 +22,8 @@ final class PeonStore: ObservableObject {
     @Published private(set) var version = ""
     @Published private(set) var supportsClientControls = false
     @Published private(set) var lastError: String?
+    /// The sample that's playing, as "pack/category", so its button can show pause.
+    @Published private(set) var playingPreview: String?
 
     let peonDir: URL
     private var configURL: URL { peonDir.appendingPathComponent("config.json") }
@@ -153,16 +155,38 @@ final class PeonStore: ObservableObject {
         patchConfig([.set(["desktop_notifications"], value)])
     }
 
-    /// Plays one random sound from the category at its effective volume.
-    func preview(_ category: SoundCategory, pack: SoundPack? = nil) {
-        guard let sound = (pack ?? activePack)?.sounds[category.id]?.randomElement() else { return }
+    func isPlaying(_ category: SoundCategory, pack: SoundPack? = nil) -> Bool {
+        playingPreview == Self.previewKey(category, pack ?? activePack)
+    }
+
+    /// Plays one random sound from the category at its effective volume, or
+    /// stops it if that sample is already playing.
+    func togglePreview(_ category: SoundCategory, pack: SoundPack? = nil) {
+        let key = Self.previewKey(category, pack ?? activePack)
+        let wasPlaying = playingPreview == key
         previewProcess?.terminate()
+        previewProcess = nil
+        playingPreview = nil
+        guard !wasPlaying, let sound = (pack ?? activePack)?.sounds[category.id]?.randomElement() else { return }
+
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/afplay")
         let effective = volume * self.volume(for: category)
         process.arguments = ["-v", String(format: "%.3f", effective), sound.url.path]
-        try? process.run()
+        process.terminationHandler = { [weak self] ended in
+            DispatchQueue.main.async {
+                guard let self, self.previewProcess === ended else { return }
+                self.previewProcess = nil
+                self.playingPreview = nil
+            }
+        }
+        guard (try? process.run()) != nil else { return }
         previewProcess = process
+        playingPreview = key
+    }
+
+    private static func previewKey(_ category: SoundCategory, _ pack: SoundPack?) -> String {
+        "\(pack?.id ?? "")/\(category.id)"
     }
 
     func openConfig() {
