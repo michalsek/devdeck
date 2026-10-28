@@ -22,6 +22,8 @@ final class PeonStore: ObservableObject {
     @Published private(set) var version = ""
     @Published private(set) var supportsClientControls = false
     @Published private(set) var lastError: String?
+    /// False when peon-ping isn't installed; DevDeck then hides everything about sounds.
+    @Published private(set) var installed = false
     /// The sample that's playing, as "pack/category", so its button can show pause.
     @Published private(set) var playingPreview: String?
 
@@ -63,6 +65,7 @@ final class PeonStore: ObservableObject {
         let config = Self.readJSON(configURL)
         let state = Self.readJSON(stateURL)
 
+        installed = FileManager.default.fileExists(atPath: scriptURL.path)
         paused = FileManager.default.fileExists(atPath: pausedURL.path)
         volume = Self.double(config["volume"]) ?? 0.5
         defaultPack = config["default_pack"] as? String ?? config["active_pack"] as? String ?? "peon"

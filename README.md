@@ -52,6 +52,10 @@ and per-client control need a `peon.sh` that supports `category_volumes` /
 `disabled_clients`; with an older one those controls are disabled. Set
 `CLAUDE_PEON_DIR` to point the app at a different peon-ping data directory.
 
+peon-ping is optional. Without it (no `peon.sh` in its data directory) the Agent Sounds
+menu section and the three sound pages are hidden, and they appear on their own once
+peon-ping is installed.
+
 ## Build
 
 Requires Xcode (or its command line tools).

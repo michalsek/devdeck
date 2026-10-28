@@ -26,12 +26,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let settings = AppSettings()
 
     private var statusMenu: StatusMenu?
+    private var pageItems: [DashboardPage: NSMenuItem] = [:]
+    private var subscriptions = Set<AnyCancellable>()
     private lazy var dashboard = DashboardWindow { [unowned self] in
         AnyView(DashboardView().environmentObjects(peon, devices, servers, settings))
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = mainMenu()
+        peon.$installed.removeDuplicates()
+            .sink { [unowned self] installed in updatePageItems(peonInstalled: installed) }
+            .store(in: &subscriptions)
         statusMenu = StatusMenu(
             peon: peon, devices: devices, servers: servers, settings: settings,
             openDashboard: { [unowned self] page in dashboard.show(page) })
@@ -93,9 +98,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item("Paste", #selector(NSText.paste(_:)), "v"),
             item("Select All", #selector(NSText.selectAll(_:)), "a"),
         ])
-        let pages = DashboardPage.allCases.enumerated().map { index, page in
-            ActionItem(page.title, key: "\(index + 1)") { [unowned self] in dashboard.show(page) }
+        let pages = DashboardPage.allCases.map { page in
+            ActionItem(page.title) { [unowned self] in dashboard.show(page) }
         }
+        pageItems = Dictionary(uniqueKeysWithValues: zip(DashboardPage.allCases, pages))
         _ = submenu("View", pages + [
             .separator(),
             item("Toggle Sidebar", #selector(NSSplitViewController.toggleSidebar(_:)), "s", [.command, .control]),
@@ -109,6 +115,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item("Bring All to Front", #selector(NSApplication.arrangeInFront(_:))),
         ])
         return main
+    }
+
+    /// Hides the peon-ping pages without peon-ping, and numbers ⌘1, ⌘2… over the visible ones.
+    private func updatePageItems(peonInstalled: Bool) {
+        var number = 0
+        for page in DashboardPage.allCases {
+            guard let item = pageItems[page] else { continue }
+            item.isHidden = page.needsPeon && !peonInstalled
+            if item.isHidden {
+                item.keyEquivalent = ""
+            } else {
+                number += 1
+                item.keyEquivalent = "\(number)"
+            }
+        }
     }
 }
 

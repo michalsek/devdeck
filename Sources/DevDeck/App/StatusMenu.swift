@@ -55,8 +55,10 @@ final class StatusMenu: NSObject, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
-        addSounds()
-        menu.addItem(.separator())
+        if peon.installed {
+            addSounds()
+            menu.addItem(.separator())
+        }
         addDevices()
         menu.addItem(.separator())
         addServers()

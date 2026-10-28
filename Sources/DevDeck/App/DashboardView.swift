@@ -45,27 +45,36 @@ enum DashboardPage: String, Hashable, CaseIterable {
         case .sounds: "The sounds peon-ping plays when a coding agent finishes, fails or needs your input."
         case .packs: "The voice that plays agent sounds. Click a pack to use it, or the play button to hear it."
         case .clients: "Choose which coding agents and apps can play sounds and show notifications."
-        case .general: "Start-up options, and where peon-ping keeps its settings."
+        case .general: "Start-up options and the menu bar icon."
         }
     }
+
+    /// The peon-ping pages, hidden when peon-ping isn't installed.
+    var needsPeon: Bool { [.sounds, .packs, .clients].contains(self) }
 }
 
 struct DashboardView: View {
     @EnvironmentObject private var devices: DeviceStore
     @EnvironmentObject private var servers: ServerStore
-    @AppStorage(DashboardPage.storageKey) private var page: DashboardPage = .servers
+    @EnvironmentObject private var peon: PeonStore
+    @AppStorage(DashboardPage.storageKey) private var storedPage: DashboardPage = .servers
+
+    /// The stored page, unless it's a peon-ping page and peon-ping isn't installed.
+    private var page: DashboardPage { storedPage.needsPeon && !peon.installed ? .servers : storedPage }
 
     var body: some View {
         NavigationSplitView {
-            List(selection: Binding(get: { page }, set: { if let value = $0 { page = value } })) {
+            List(selection: Binding(get: { page }, set: { if let value = $0 { storedPage = value } })) {
                 Section {
                     row(.devices, badge: devices.running.count)
                     row(.servers, badge: servers.devServers.count)
                 }
-                Section {
-                    row(.sounds)
-                    row(.packs)
-                    row(.clients)
+                if peon.installed {
+                    Section {
+                        row(.sounds)
+                        row(.packs)
+                        row(.clients)
+                    }
                 }
                 Section {
                     row(.general)
@@ -173,18 +182,21 @@ struct GeneralView: View {
                 .pickerStyle(.segmented)
                 .fixedSize()
             } footer: {
-                Text("The number next to the menu bar icon is how many dev servers are running. The icon dims while sounds are muted.")
+                Text("The number next to the menu bar icon is how many dev servers are running."
+                    + (peon.installed ? " The icon dims while sounds are muted." : ""))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            Section("peon-ping") {
-                LabeledContent("Version", value: peon.version.isEmpty ? "unknown" : peon.version)
-                LabeledContent("Data folder") {
-                    Text(peon.peonDir.path).textSelection(.enabled)
-                }
-                HStack {
-                    Spacer()
-                    Button("Open config.json") { peon.openConfig() }
+            if peon.installed {
+                Section("peon-ping") {
+                    LabeledContent("Version", value: peon.version.isEmpty ? "unknown" : peon.version)
+                    LabeledContent("Data folder") {
+                        Text(peon.peonDir.path).textSelection(.enabled)
+                    }
+                    HStack {
+                        Spacer()
+                        Button("Open config.json") { peon.openConfig() }
+                    }
                 }
             }
             if app.lastError != nil || peon.lastError != nil {
