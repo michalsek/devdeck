@@ -24,12 +24,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let devices = DeviceStore()
     let servers = ServerStore()
     let settings = AppSettings()
+    lazy var leases = LeaseStore(devices: devices)
+    let hooks = HookInstaller()
 
     private var statusMenu: StatusMenu?
     private var pageItems: [DashboardPage: NSMenuItem] = [:]
     private var subscriptions = Set<AnyCancellable>()
     private lazy var dashboard = DashboardWindow { [unowned self] in
-        AnyView(DashboardView().environmentObjects(peon, devices, servers, settings))
+        AnyView(DashboardView().environmentObjects(peon, devices, servers, settings, leases, hooks))
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -38,7 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [unowned self] installed in updatePageItems(peonInstalled: installed) }
             .store(in: &subscriptions)
         statusMenu = StatusMenu(
-            peon: peon, devices: devices, servers: servers, settings: settings,
+            peon: peon, devices: devices, servers: servers, settings: settings, leases: leases, hooks: hooks,
             openDashboard: { [unowned self] page in dashboard.show(page) })
         handleLaunchArguments()
     }
@@ -50,9 +52,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// `--open dashboard[:page]`, e.g. `open -a DevDeck --args --open dashboard:servers`.
-    /// Handy for screenshots.
+    /// Handy for screenshots. `--hooks claude,codex` (or `--hooks none`) sets up the
+    /// agent hooks without the dashboard.
     private func handleLaunchArguments() {
         let args = CommandLine.arguments
+        if let index = args.firstIndex(of: "--hooks"), index + 1 < args.count {
+            let wanted = Set(args[index + 1].split(separator: ",").compactMap { AgentKind(rawValue: String($0)) })
+            for agent in AgentKind.allCases where hooks.isAvailable(agent) {
+                hooks.set(agent, enabled: wanted.contains(agent))
+            }
+        }
         guard let index = args.firstIndex(of: "--open"), index + 1 < args.count else { return }
         let target = args[index + 1].split(separator: ":").map(String.init)
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [self] in
@@ -205,8 +214,10 @@ final class AppSettings: ObservableObject {
 
 extension View {
     func environmentObjects(
-        _ peon: PeonStore, _ devices: DeviceStore, _ servers: ServerStore, _ app: AppSettings
+        _ peon: PeonStore, _ devices: DeviceStore, _ servers: ServerStore, _ app: AppSettings,
+        _ leases: LeaseStore, _ hooks: HookInstaller
     ) -> some View {
         environmentObject(peon).environmentObject(devices).environmentObject(servers).environmentObject(app)
+            .environmentObject(leases).environmentObject(hooks)
     }
 }

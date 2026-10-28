@@ -54,14 +54,16 @@ struct DevicesView: View {
 
 struct DeviceRow: View {
     @EnvironmentObject private var store: DeviceStore
+    @EnvironmentObject private var leases: LeaseStore
     let device: DeviceItem
 
     var body: some View {
         HStack(spacing: 10) {
-            StatusDot(tone: device.isRunning ? .running : .off)
+            StatusDot(tone: lease != nil ? .agent : device.isRunning ? .running : .off)
             VStack(alignment: .leading, spacing: 2) {
                 Text(device.name).lineLimit(1)
                 Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                if let lease { AgentLine(lease: lease) }
             }
             Spacer(minLength: 8)
             Text(device.stateLabel)
@@ -73,8 +75,11 @@ struct DeviceRow: View {
         .padding(.vertical, 2)
         .contextMenu {
             Button("Copy ID") { Pasteboard.copy(device.serial ?? device.id) }
+            if lease != nil { Button("Forget This Agent") { leases.forget(device) } }
         }
     }
+
+    private var lease: LeaseStore.Lease? { leases.lease(for: device) }
 
     private var subtitle: String {
         var parts = [device.detail]
@@ -97,5 +102,23 @@ struct DeviceRow: View {
                 Button(device.startLabel) { store.start(device) }
             }
         }
+    }
+}
+
+/// "Claude Code · gesture-tap 12 s ago · my-app", under a device an agent is driving.
+private struct AgentLine: View {
+    let lease: LeaseStore.Lease
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            HStack(spacing: 4) {
+                Image(systemName: "cpu")
+                Text("\(lease.session.agent.title) · \(lease.lastActionName) \(Format.age(since: lease.lastAction, now: context.date)) ago · \(lease.session.project.name)")
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.purple)
+        .lineLimit(1)
+        .help("Driven by \(lease.session.agentDescription). Leave it alone until the agent is done.")
     }
 }

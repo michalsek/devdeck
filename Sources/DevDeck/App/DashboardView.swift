@@ -167,6 +167,7 @@ struct ErrorRow: View {
 struct GeneralView: View {
     @EnvironmentObject private var app: AppSettings
     @EnvironmentObject private var peon: PeonStore
+    @EnvironmentObject private var hooks: HookInstaller
 
     var body: some View {
         Form {
@@ -187,6 +188,7 @@ struct GeneralView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            AgentHooksSection()
             if peon.installed {
                 Section("peon-ping") {
                     LabeledContent("Version", value: peon.version.isEmpty ? "unknown" : peon.version)
@@ -199,10 +201,39 @@ struct GeneralView: View {
                     }
                 }
             }
-            if app.lastError != nil || peon.lastError != nil {
-                Section { ErrorRow(errors: [app.lastError, peon.lastError]) }
+            if app.lastError != nil || peon.lastError != nil || hooks.lastError != nil {
+                Section { ErrorRow(errors: [app.lastError, peon.lastError, hooks.lastError]) }
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+/// Turns the agent hooks on and off. They tell DevDeck which device each agent is driving.
+private struct AgentHooksSection: View {
+    @EnvironmentObject private var hooks: HookInstaller
+    @EnvironmentObject private var leases: LeaseStore
+
+    var body: some View {
+        Section {
+            ForEach(AgentKind.allCases) { agent in
+                Toggle(isOn: Binding(get: { hooks.installed.contains(agent) }, set: { hooks.set(agent, enabled: $0) })) {
+                    Text(agent.title)
+                    Text(hooks.isAvailable(agent)
+                        ? HookInstaller.configURL(agent).path.replacingOccurrences(
+                            of: FileManager.default.homeDirectoryForCurrentUser.path, with: "~")
+                        : "Not installed")
+                }
+                .disabled(!hooks.isAvailable(agent))
+            }
+        } header: {
+            Text("Agent Activity")
+        } footer: {
+            Text(leases.listening
+                ? "Agents report which simulator or device they're driving, and DevDeck marks it in purple. The hooks run in the background and never slow an agent down. Codex skips new hooks until you trust them in /hooks."
+                : "DevDeck couldn't open its socket, so agent activity isn't shown.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 }

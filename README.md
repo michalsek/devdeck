@@ -44,6 +44,22 @@ closing it goes back to menu bar only.
   after 3 seconds. The shell, terminal or agent above the wrappers is left alone, and so
   is DevDeck itself.
 
+## Agent activity
+
+DevDeck shows which simulator or device a coding agent is driving: the device turns
+purple, with the agent, its last action and the project ("Claude Code · gesture-tap 12 s
+ago · my-app"), so you know to leave it alone. Turn it on per agent in
+General → Agent Activity (or `open -a DevDeck --args --hooks claude,codex`).
+
+- It adds async `PreToolUse` and `SessionEnd` hooks to `~/.claude/settings.json` and
+  `~/.codex/hooks.json`. They run `devdeck-hook` (inside the app), which forwards argent
+  tool calls and `xcrun simctl` / `adb` / `emulator` commands to a socket in
+  `~/Library/Application Support/DevDeck`. Codex skips new hooks until you trust them
+  in `/hooks`.
+- The hooks never block or slow an agent, and do nothing while DevDeck isn't running.
+- A device counts as driven until the agent has been idle on it for 10 minutes, its
+  session ends, or the device is shut down. Nothing is enforced yet.
+
 ## Agent sounds
 
 DevDeck reads and writes peon-ping's own `config.json` and `.paused` files, so changes

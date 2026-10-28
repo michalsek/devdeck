@@ -9,6 +9,10 @@ let package = Package(
             name: "DevDeck",
             path: "Sources/DevDeck"
         ),
+        .executableTarget(
+            name: "devdeck-hook",
+            path: "Sources/devdeck-hook"
+        ),
         .testTarget(
             name: "DevDeckTests",
             dependencies: ["DevDeck"],

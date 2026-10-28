@@ -14,6 +14,8 @@ BIN="$(swift build --package-path "$REPO" -c release --show-bin-path)/DevDeck"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/DevDeck"
+# Agent hooks call this helper (see Sources/devdeck-hook).
+cp "$(dirname "$BIN")/devdeck-hook" "$APP/Contents/MacOS/devdeck-hook"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
