@@ -31,7 +31,10 @@ func isRelevant(_ event: [String: Any]) -> Bool {
         if tool.hasPrefix("mcp__argent__") { return true }
         guard tool == "Bash", let command = (event["tool_input"] as? [String: Any])?["command"] as? String
         else { return false }
-        return command.range(of: #"\b(simctl|adb|emulator)\b"#, options: .regularExpression) != nil
+        // Devices, and heavy work DevDeck may make wait for room (builds, dev servers).
+        return command.range(
+            of: #"\b(simctl|adb|emulator|xcodebuild|gradlew|gradle|expo|react-native|eas|npm|yarn|pnpm|bun|vite|next|nuxt|astro|remix|storybook|start-storybook|metro)\b"#,
+            options: .regularExpression) != nil
     default:
         return false
     }

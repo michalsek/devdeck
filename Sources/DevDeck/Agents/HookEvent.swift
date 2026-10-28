@@ -43,6 +43,8 @@ struct HookEvent: Equatable {
     let targets: [DeviceTarget]
     /// Devices the call is done with (shut down, simulator server stopped).
     let releases: [DeviceTarget]
+    /// Heavy work the call starts (a build, a dev server, a device boot).
+    let pools: [Pool]
 
     init?(json: [String: Any]) {
         guard let agent = (json["agent"] as? String).flatMap(AgentKind.init),
@@ -59,20 +61,25 @@ struct HookEvent: Equatable {
             action = kind == .turnEnd ? "turn ended" : "session ended"
             targets = []
             releases = []
+            pools = []
         case "PreToolUse":
             let tool = json["tool_name"] as? String ?? ""
             let input = json["tool_input"] as? [String: Any] ?? [:]
-            let parsed: (action: String, targets: [DeviceTarget], releases: [DeviceTarget])?
+            var parsed: (action: String, targets: [DeviceTarget], releases: [DeviceTarget])?
+            var pools: [Pool] = []
             if tool.hasPrefix(Self.argentPrefix) {
-                parsed = Self.argentCall(String(tool.dropFirst(Self.argentPrefix.count)), input)
+                let name = String(tool.dropFirst(Self.argentPrefix.count))
+                parsed = Self.argentCall(name, input)
+                pools = Pool.forArgent(name, input)
             } else if tool == "Bash", let command = input["command"] as? String {
                 parsed = Self.shellCommand(command)
-            } else {
-                parsed = nil
+                pools = Pool.forShell(command)
+                if parsed == nil, !pools.isEmpty { parsed = (Self.shortName(command), [], []) }
             }
-            guard let parsed, !(parsed.targets.isEmpty && parsed.releases.isEmpty) else { return nil }
+            guard let parsed, !(parsed.targets.isEmpty && parsed.releases.isEmpty && pools.isEmpty) else { return nil }
             kind = .toolUse
             (action, targets, releases) = parsed
+            self.pools = pools
         default:
             return nil
         }
@@ -158,6 +165,14 @@ struct HookEvent: Equatable {
         }
         guard !targets.isEmpty || !releases.isEmpty else { return nil }
         return (actions.first ?? "shell", targets, releases)
+    }
+
+    /// "npx expo run:ios" from "cd app && npx expo run:ios --device X", for display.
+    static func shortName(_ command: String) -> String {
+        let part = command.components(separatedBy: CharacterSet(charactersIn: ";|&\n"))
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { !Pool.forShell($0).isEmpty } ?? command
+        return part.split(separator: " ").prefix(3).joined(separator: " ")
     }
 
     /// simctl commands that don't act on a particular device.

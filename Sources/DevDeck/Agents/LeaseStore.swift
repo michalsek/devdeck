@@ -17,6 +17,8 @@ final class LeaseStore: ObservableObject {
 
     private let devices: DeviceStore
     private let settings: AppSettings
+    private let servers: ServerStore
+    let monitor: ResourceMonitor
     private var server: BrokerServer?
     private var timer: Timer?
     /// Hook connections of waiting calls, and the calls themselves (for the reason when
@@ -24,9 +26,11 @@ final class LeaseStore: ObservableObject {
     private var connections: [UUID: BrokerConnection] = [:]
     private var pending: [UUID: LeaseBook.Waiter] = [:]
 
-    init(devices: DeviceStore, settings: AppSettings) {
+    init(devices: DeviceStore, settings: AppSettings, servers: ServerStore, monitor: ResourceMonitor) {
         self.devices = devices
         self.settings = settings
+        self.servers = servers
+        self.monitor = monitor
         openSocket()
         timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
@@ -86,6 +90,18 @@ final class LeaseStore: ObservableObject {
         book.moveToFront(waiter.id)
     }
 
+    /// Lets a waiting agent call through now, whatever it's waiting for.
+    func runNow(_ waiter: LeaseBook.Waiter) {
+        carryOut(book.forceAllow(waiter.id, now: .now))
+    }
+
+    /// Waiting calls that are waiting for room on the Mac rather than for a device.
+    var waitingForRoom: [LeaseBook.Waiter] {
+        book.waiters.filter { waiter in
+            !waiter.pools.isEmpty && !waiter.touched.contains { book.isBlocked($0, for: waiter.session, now: .now) }
+        }
+    }
+
     /// Turns a waiting agent call away now; the agent is told the device is in use.
     func dismiss(_ waiter: LeaseBook.Waiter) {
         carryOut(book.dismiss(waiter.id))
@@ -122,10 +138,18 @@ final class LeaseStore: ObservableObject {
             connection.close()
         case .toolUse:
             let maxWait = (json["max_wait"] as? Double).map { min($0, Self.defaultMaxWait) } ?? Self.defaultMaxWait
+            let targets = event.targets.flatMap(resolve)
+            // Booting a device that's already running takes no room.
+            let booting = Set<Pool>([.iosSimulator, .androidEmulator])
+            let alreadyRunning = !targets.isEmpty && targets.allSatisfy { id in
+                devices.running.contains { $0.id == id || $0.serial == id }
+            }
             let waiter = LeaseBook.Waiter(
                 id: UUID(), session: session, action: event.action,
-                devices: event.targets.flatMap(resolve), releases: event.releases.flatMap(resolve),
-                since: now, deadline: now.addingTimeInterval(maxWait))
+                devices: targets, releases: event.releases.flatMap(resolve),
+                since: now, deadline: now.addingTimeInterval(maxWait),
+                pools: event.pools.filter { !(booting.contains($0) && alreadyRunning) })
+            updateResources()
             switch book.request(waiter, alternatives: alternatives(for: waiter.touched), now: now) {
             case .allow:
                 connection.respond(["decision": "allow"])
@@ -148,6 +172,7 @@ final class LeaseStore: ObservableObject {
         if let waiter = waiter.flatMap(UUID.init(uuidString:)).flatMap({ id in book.waiters.first { $0.id == id } }) {
             switch command {
             case "front": moveToFront(waiter)
+            case "run": runNow(waiter)
             case "dismiss": dismiss(waiter)
             default: return ["ok": false, "error": "unknown command"]
             }
@@ -178,9 +203,17 @@ final class LeaseStore: ObservableObject {
             return entry
         }
         let waiters = book.waiters.map {
-            ["id": $0.id.uuidString, "devices": $0.touched, "agent": $0.session.label, "action": $0.action] as [String: Any]
+            ["id": $0.id.uuidString, "devices": $0.touched, "agent": $0.session.label, "action": $0.action,
+             "pools": $0.pools.map(\.rawValue)] as [String: Any]
         }
-        return ["ok": true, "leases": leases, "queue": Array(book.queue), "waiting": waiters]
+        updateResources()
+        let pools = Pool.allCases.map {
+            ["pool": $0.rawValue, "used": book.used($0, now: .now), "limit": book.resources.limits[$0] ?? 0] as [String: Any]
+        }
+        return [
+            "ok": true, "leases": leases, "queue": Array(book.queue), "waiting": waiters, "pools": pools,
+            "memoryFree": monitor.snapshot.memoryFree, "memoryLow": monitor.memoryLow,
+        ]
     }
 
     private func hungUp(_ waiter: UUID) {
@@ -229,10 +262,24 @@ final class LeaseStore: ObservableObject {
         listening = server != nil
     }
 
+    /// What's running against the limits, for the book's room checks.
+    private func updateResources() {
+        book.resources = LeaseBook.Resources(
+            usage: [
+                .iosSimulator: devices.running.filter { $0.kind == .simulator }.count,
+                .androidEmulator: devices.running.filter { $0.kind == .emulator }.count,
+                .build: monitor.builds.count,
+                .devServer: servers.devServers.count,
+            ],
+            limits: monitor.limits,
+            memoryLow: monitor.memoryLow)
+    }
+
     private func tick() {
         // Something replaced or removed the socket file: open a fresh one.
         if server?.isStale ?? true { openSocket() }
         guard devices.loaded else { return }
+        updateResources()
         let running = Set(devices.running.flatMap { [$0.id] + ($0.serial.map { [$0] } ?? []) })
         let minutes = settings.holdReleaseMinutes
         carryOut(book.tick(
@@ -282,8 +329,26 @@ final class LeaseStore: ObservableObject {
         return waiter.touched.map(name(of:)).joined(separator: ", ")
     }
 
+    /// "1 native build is running (limit 1)" or "memory is low (12% free)".
+    private func roomProblem(_ waiter: LeaseBook.Waiter) -> String {
+        var problems: [String] = []
+        if book.resources.memoryLow { problems.append("memory is low (\(monitor.snapshot.memoryFree)% free)") }
+        for pool in waiter.pools where book.isFull(pool, now: .now) {
+            let used = book.used(pool, now: .now)
+            problems.append("\(pool.count(used)) \(used == 1 ? "is" : "are") running (limit \(book.resources.limits[pool] ?? 0))")
+        }
+        return problems.isEmpty ? "it was busy" : problems.joined(separator: " and ")
+    }
+
     /// What the agent reads when its call is turned away after waiting.
     private func denyReason(_ waiter: LeaseBook.Waiter?, _ reason: LeaseBook.DenyReason) -> String {
+        if let waiter, !waiter.touched.contains(where: { book.isBlocked($0, for: waiter.session, now: .now) }),
+           !waiter.pools.isEmpty {
+            return "DevDeck: the Mac is busy, so \"\(waiter.action)\" was not run: \(roomProblem(waiter))."
+                + (reason == .dismissed ? " The user turned it away." : " It waited too long.")
+                + " The user set these limits to keep the Mac responsive. Wait for the running work to finish"
+                + " (or stop work of yours you no longer need), then try again."
+        }
         // Free devices of the same kind as the ones it wanted.
         let candidates = Set(alternatives(for: waiter?.touched ?? []).values.joined())
         let free = devices.running

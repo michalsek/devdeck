@@ -31,7 +31,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let devices = DeviceStore()
     let servers = ServerStore()
     let settings = AppSettings()
-    lazy var leases = LeaseStore(devices: devices, settings: settings)
+    let monitor = ResourceMonitor()
+    lazy var leases = LeaseStore(devices: devices, settings: settings, servers: servers, monitor: monitor)
     let hooks = HookInstaller()
     lazy var markers = MarkerController(leases: leases, devices: devices, settings: settings)
 
@@ -237,6 +238,6 @@ extension View {
         _ leases: LeaseStore, _ hooks: HookInstaller
     ) -> some View {
         environmentObject(peon).environmentObject(devices).environmentObject(servers).environmentObject(app)
-            .environmentObject(leases).environmentObject(hooks)
+            .environmentObject(leases).environmentObject(hooks).environmentObject(leases.monitor)
     }
 }

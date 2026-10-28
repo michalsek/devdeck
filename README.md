@@ -82,7 +82,18 @@ it, with Take Over, Release, Move to Front (let a waiting call go next) and Turn
 agent is told the device is in use).
 - Scripts can do the same over the socket, one JSON line per connection:
   `{"command": "hold" | "release" | "queue" | "leave", "device": "<udid or serial>"}`,
-  `{"command": "front" | "dismiss", "waiter": "<id from status>"}` or `{"command": "status"}`.
+  `{"command": "front" | "run" | "dismiss", "waiter": "<id from status>"}` or `{"command": "status"}`.
+
+**Keeping the Mac responsive.** Heavy work an agent starts waits for room. Each kind
+has a limit, set on the **Resources** page: booted iOS simulators (2), running Android
+emulators (1), native builds (1: `xcodebuild`, Gradle builds, `expo run`,
+`react-native run-*`, local EAS builds) and dev servers (3: `expo start`, `npm run dev`,
+Vite, Next.js…). While memory is low (below 15% free by default, or macOS reports memory
+pressure), nothing heavy starts. DevDeck counts what's actually running, your own work
+included, but only agents are held back. A call that gets through reserves its room for
+a minute, until its process shows up. The Resources page also shows the Mac's load,
+lists calls waiting for room (Run Now, Turn Away), stops idle Gradle and Kotlin daemons,
+and can run builds at background priority while you're at the Mac.
 
 **Device markers.** DevDeck also shows it on the device, through a small DevDeck
 companion app (see `helpers/`) that it installs when an agent first drives a simulator

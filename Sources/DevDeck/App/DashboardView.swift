@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum DashboardPage: String, Hashable, CaseIterable {
-    case devices, leases, servers, sounds, packs, clients, general
+    case devices, leases, resources, servers, sounds, packs, clients, general
 
     static let storageKey = "dashboardPage"
 
@@ -9,6 +9,7 @@ enum DashboardPage: String, Hashable, CaseIterable {
         switch self {
         case .devices: "Devices"
         case .leases: "Leases"
+        case .resources: "Resources"
         case .servers: "Dev Servers"
         case .sounds: "Agent Sounds"
         case .packs: "Voice Packs"
@@ -21,6 +22,7 @@ enum DashboardPage: String, Hashable, CaseIterable {
         switch self {
         case .devices: "iphone.gen3"
         case .leases: "hand.raised.fill"
+        case .resources: "gauge.with.dots.needle.67percent"
         case .servers: "server.rack"
         case .sounds: "speaker.wave.2.fill"
         case .packs: "person.wave.2.fill"
@@ -33,6 +35,7 @@ enum DashboardPage: String, Hashable, CaseIterable {
         switch self {
         case .devices: .blue
         case .leases: .indigo
+        case .resources: .teal
         case .servers: .green
         case .sounds: .pink
         case .packs: .orange
@@ -44,6 +47,7 @@ enum DashboardPage: String, Hashable, CaseIterable {
     var summary: String {
         switch self {
         case .devices: "Simulators, emulators and connected phones. Boot them, or shut down the ones you're done with."
+        case .resources: "How loaded this Mac is, and how much heavy work agents may start at once. Over a limit, or low on memory, they wait."
         case .leases: "Who is using each simulator and device, and who's waiting for it. Agents wait for you, and for each other."
         case .servers: "Dev servers running on this Mac, found by their listening ports. Stop the ones that are left over."
         case .sounds: "The sounds peon-ping plays when a coding agent finishes, fails or needs your input."
@@ -72,7 +76,8 @@ struct DashboardView: View {
             List(selection: Binding(get: { page }, set: { if let value = $0 { storedPage = value } })) {
                 Section {
                     row(.devices, badge: devices.running.count)
-                    row(.leases, badge: leases.book.waiters.count)
+                    row(.leases, badge: leases.book.waiters.count - leases.waitingForRoom.count)
+                    row(.resources, badge: leases.waitingForRoom.count)
                     row(.servers, badge: servers.devServers.count)
                 }
                 if peon.installed {
@@ -93,6 +98,7 @@ struct DashboardView: View {
                 switch page {
                 case .devices: DevicesView()
                 case .leases: LeasesView()
+                case .resources: ResourcesView()
                 case .servers: ServersView()
                 case .sounds: SoundsView()
                 case .packs: PacksView()

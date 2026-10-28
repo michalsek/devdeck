@@ -27,6 +27,9 @@ struct AgentSession: Hashable {
 ///   `Timing.handoff`). If a free device of the same kind is running, the call is turned
 ///   away at once with that device's name instead of waiting.
 /// - Subagents share their parent's session, so they never wait for each other.
+/// - Heavy work (device boots, native builds, dev servers) also waits for room: each
+///   `Pool` has a limit, and nothing new starts while memory is low. A call let through
+///   reserves its room for a minute, until its process shows up in `Resources.usage`.
 struct LeaseBook {
     enum Holder: Hashable {
         case agent(AgentSession)
@@ -60,8 +63,23 @@ struct LeaseBook {
         let releases: [String]
         let since: Date
         let deadline: Date
+        /// Heavy work the call starts.
+        var pools: [Pool] = []
 
         var touched: [String] { devices + releases }
+    }
+
+    /// What's running on the Mac and how much is allowed, from `LeaseStore`.
+    struct Resources: Equatable {
+        var usage: [Pool: Int] = [:]
+        var limits: [Pool: Int] = [:]
+        /// Free memory is below the user's threshold: start nothing heavy.
+        var memoryLow = false
+    }
+
+    struct Reservation: Hashable {
+        let pool: Pool
+        let until: Date
     }
 
     struct Timing {
@@ -104,6 +122,8 @@ struct LeaseBook {
     }
 
     var timing = Timing()
+    var resources = Resources()
+    private(set) var reservations: [Reservation] = []
     private(set) var leases: [String: Lease] = [:]
     /// Devices the user is queued for.
     private(set) var queue: Set<String> = []
@@ -128,6 +148,20 @@ struct LeaseBook {
         }
     }
 
+    /// Running plus reserved work in `pool`.
+    func used(_ pool: Pool, now: Date) -> Int {
+        resources.usage[pool, default: 0] + reservations.filter { $0.pool == pool && $0.until > now }.count
+    }
+
+    func isFull(_ pool: Pool, now: Date) -> Bool {
+        used(pool, now: now) >= resources.limits[pool, default: Int.max]
+    }
+
+    /// The call starts heavy work and there's no room for it now.
+    func needsRoom(_ waiter: Waiter, now: Date) -> Bool {
+        !waiter.pools.isEmpty && (resources.memoryLow || waiter.pools.contains { isFull($0, now: now) })
+    }
+
     /// An agent lease another agent may take: its turn ended, or it's been idle a while.
     func isFreeToHandOver(_ lease: Lease, now: Date) -> Bool {
         lease.turnEnded || now.timeIntervalSince(lease.lastAction) >= timing.handoff
@@ -140,6 +174,10 @@ struct LeaseBook {
     mutating func request(_ waiter: Waiter, alternatives: [String: [String]] = [:], now: Date) -> Decision {
         let blocked = waiter.touched.filter { isBlocked($0, for: waiter.session, now: now) }
         if blocked.isEmpty {
+            if needsRoom(waiter, now: now) {
+                waiters.append(waiter)
+                return .wait
+            }
             apply(waiter, now: now)
             return .allow
         }
@@ -232,6 +270,14 @@ struct LeaseBook {
         waiters.insert(waiters.remove(at: index), at: 0)
     }
 
+    /// Lets a waiting call through now, whatever it's waiting for.
+    mutating func forceAllow(_ waiter: UUID, now: Date) -> Effects {
+        guard let found = waiters.first(where: { $0.id == waiter }) else { return Effects() }
+        waiters.removeAll { $0.id == waiter }
+        apply(found, now: now)
+        return Effects(allowed: [waiter])
+    }
+
     /// Turns a waiting call away now.
     mutating func dismiss(_ waiter: UUID) -> Effects {
         guard waiters.contains(where: { $0.id == waiter }) else { return Effects() }
@@ -262,6 +308,7 @@ struct LeaseBook {
             }
         }
         queue = queue.filter(running.contains)
+        reservations.removeAll { $0.until <= now }
         let expired = waiters.filter { $0.deadline <= now }
         waiters.removeAll { $0.deadline <= now }
         effects.denied += expired.map { Denial(waiter: $0.id, reason: .timedOut) }
@@ -272,6 +319,7 @@ struct LeaseBook {
     // MARK: Internals
 
     private mutating func apply(_ waiter: Waiter, now: Date) {
+        reservations += waiter.pools.map { Reservation(pool: $0, until: now.addingTimeInterval(60)) }
         for device in waiter.releases {
             leases[device] = nil
             queue.remove(device)
@@ -303,7 +351,8 @@ struct LeaseBook {
     private mutating func admitWaiters(now: Date) -> Effects {
         var effects = Effects()
         for waiter in waiters
-        where !waiter.touched.contains(where: { isBlocked($0, for: waiter.session, now: now) }) {
+        where !waiter.touched.contains(where: { isBlocked($0, for: waiter.session, now: now) })
+            && !needsRoom(waiter, now: now) {
             waiters.removeAll { $0.id == waiter.id }
             apply(waiter, now: now)
             effects.allowed.append(waiter.id)

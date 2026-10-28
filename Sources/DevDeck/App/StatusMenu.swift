@@ -83,6 +83,16 @@ final class StatusMenu: NSObject, NSMenuDelegate {
             item.isEnabled = false
             menu.addItem(item)
         }
+        let monitor = leases.monitor
+        let resources = ActionItem("Resources") { [weak self] in self?.openDashboard(.resources) }
+        let room = leases.waitingForRoom.count
+        resources.subtitle = ["\(monitor.snapshot.memoryFree)% memory free" + (monitor.memoryLow ? " (low)" : ""),
+                              monitor.builds.isEmpty ? nil : Pool.build.count(monitor.builds.count) + " running",
+                              room == 0 ? nil : "\(room) waiting for room"]
+            .compactMap { $0 }.joined(separator: " · ")
+        resources.image = NSImage(systemSymbolName: "gauge.with.dots.needle.67percent", accessibilityDescription: nil)
+        menu.addItem(resources)
+        menu.addItem(.separator())
         menu.addItem(ActionItem("Open Dashboard…", key: ",") { [weak self] in self?.openDashboard(nil) })
         menu.addItem(ActionItem("Quit DevDeck", key: "q") { NSApp.terminate(nil) })
     }
