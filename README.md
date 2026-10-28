@@ -8,8 +8,8 @@ simulators and devices, dev servers, and agent sound notifications (peon-ping).
 A native macOS menu, so it looks and behaves like the system's own.
 - Agent sounds: mute all, volume, voice pack, per-sound volume
 - Running devices: hover one for Shut Down / Stop; "Start a Device" boots a simulator or emulator
-- Running dev servers (project, kind, port, uptime): hover one for Stop, Open in Browser,
-  Reveal in Finder, Open in Terminal
+- Running dev servers (project, kind, port, uptime): hover one for Reload Apps (Metro),
+  Stop, Open in Browser, Reveal in Finder, Open in Terminal
 - The number next to the icon is how many dev servers are running; the icon dims while
   sounds are muted. General in the dashboard has a choice of icons.
 
@@ -18,7 +18,8 @@ A native macOS menu, so it looks and behaves like the system's own.
   paired iPhones/iPads and adb devices
 - Dev Servers: Metro (Expo / React Native, with the apps connected to it), Vite,
   Next.js, Storybook and other servers run by node, bun, deno, python, ruby or php;
-  agent tools such as the argent tool-server are listed separately. The ⓘ button shows
+  agent tools such as the argent tool-server are listed separately. Reload on a Metro
+  server reloads the apps connected to it, like pressing `r` in its terminal. The ⓘ button shows
   a server's folder, command and PID; right-click to open it in the browser, Finder or Terminal.
 - Agent Sounds, Voice Packs, Agent Apps: peon-ping settings (see below)
 - General: open at login, menu bar icon, peon-ping info
@@ -36,6 +37,8 @@ closing it goes back to menu bar only.
   runtimes bundled inside apps (editor helpers, Electron backends). The project name
   is the git repo the server runs in (worktrees are named too). Metro is recognized
   by its `/status` endpoint, and `/json/list` gives the connected apps.
+- Reload sends a `reload` broadcast on Metro's `/message` WebSocket, which is what
+  pressing `r` in the Metro terminal does. Works with both Expo and React Native CLI.
 - Stop sends SIGTERM to the server, its child processes and the wrappers that launched
   it (`npm run`, `npx`, `yarn`, `pnpm`, `sh -c`), and SIGKILL to anything still alive
   after 3 seconds. The shell, terminal or agent above the wrappers is left alone, and so

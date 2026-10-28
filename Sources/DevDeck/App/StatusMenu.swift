@@ -150,6 +150,14 @@ final class StatusMenu: NSObject, NSMenuDelegate {
             row.subtitle = server.summary
             row.image = .statusDot(server.tone == .attention ? .systemOrange : .systemGreen)
             let actions = NSMenu()
+            actions.autoenablesItems = false
+            if server.metro != nil {
+                let reload = ActionItem("Reload Apps") { [servers] in servers.reloadApps(server) }
+                reload.subtitle = server.canReloadApps ? "Like pressing r in Metro" : "No app connected"
+                reload.isEnabled = server.canReloadApps
+                actions.addItem(reload)
+                actions.addItem(.separator())
+            }
             if server.url != nil {
                 actions.addItem(ActionItem("Open in Browser") { [servers] in servers.open(server) })
             }

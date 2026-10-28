@@ -27,6 +27,8 @@ struct DevServer: Identifiable, Hashable {
 
     struct Metro: Hashable {
         let running: Bool
+        /// The port that answered as Metro, used to talk to its `/message` socket.
+        let port: Int
         let apps: [String]
     }
 }
@@ -184,9 +186,27 @@ enum ServerScanner {
                     if !apps.contains(name) { apps.append(name) }
                 }
             }
-            return .init(running: true, apps: apps)
+            return .init(running: true, port: port, apps: apps)
         }
         return nil
+    }
+
+    /// Same as pressing `r` in Metro's terminal: a `reload` broadcast on Metro's `/message`
+    /// socket reaches every attached app. Expo only accepts broadcasts from local clients
+    /// that send no foreign Origin header, which this is.
+    static func reloadApps(port: Int) async -> Bool {
+        guard let url = URL(string: "ws://127.0.0.1:\(port)/message") else { return false }
+        let socket = session.webSocketTask(with: url)
+        socket.resume()
+        defer { socket.cancel(with: .normalClosure, reason: nil) }
+        do {
+            try await socket.send(.string(#"{"version":2,"method":"reload"}"#))
+            // Let Metro fan the message out before the socket closes.
+            try await Task.sleep(for: .milliseconds(300))
+            return true
+        } catch {
+            return false
+        }
     }
 
     private static let session: URLSession = {

@@ -5,6 +5,7 @@ import Foundation
 final class ServerStore: ObservableObject {
     @Published private(set) var servers: [DevServer] = []
     @Published private(set) var stopping: Set<Int32> = []
+    @Published private(set) var reloading: Set<Int32> = []
     @Published private(set) var lastError: String?
     @Published private(set) var loaded = false
 
@@ -37,6 +38,17 @@ final class ServerStore: ObservableObject {
             lastError = stopped ? nil : "\(server.project.name) (pid \(server.pid)) didn't stop."
             await refresh()
             stopping.remove(server.pid)
+        }
+    }
+
+    func reloadApps(_ server: DevServer) {
+        guard let port = server.metro?.port else { return }
+        reloading.insert(server.pid)
+        Task {
+            let sent = await ServerScanner.reloadApps(port: port)
+            lastError = sent ? nil : "Couldn't reach Metro on port \(port) to reload \(server.project.name)'s apps."
+            try? await Task.sleep(for: .seconds(1))
+            reloading.remove(server.pid)
         }
     }
 

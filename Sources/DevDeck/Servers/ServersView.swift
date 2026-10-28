@@ -46,6 +46,9 @@ extension DevServer {
         return metro.apps.count == 1 ? "1 app connected" : "\(metro.apps.count) apps connected"
     }
 
+    /// Metro with at least one app attached, so a reload has someone to reach.
+    var canReloadApps: Bool { !(metro?.apps.isEmpty ?? true) }
+
     /// "Metro · Expo · :8082 · up 3 d · no app connected"
     var summary: String {
         [kind, ":" + portList, "up " + Format.age(since: started), statusNote].compactMap { $0 }
@@ -71,6 +74,7 @@ struct ServerRow: View {
                 Text(server.summary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 8)
+            if server.metro != nil { ReloadButton(server: server) }
             ConfirmButton(title: "Stop", busy: store.stopping.contains(server.pid)) { store.stop(server) }
             Button { showDetails(server) } label: {
                 Image(systemName: "info.circle").font(.system(size: 15))
@@ -80,6 +84,7 @@ struct ServerRow: View {
         }
         .padding(.vertical, 2)
         .contextMenu {
+            if server.canReloadApps { Button("Reload Apps") { store.reloadApps(server) } }
             if server.url != nil { Button("Open in Browser") { store.open(server) } }
             if server.cwd != nil {
                 Button("Reveal in Finder") { store.reveal(server) }
@@ -89,6 +94,23 @@ struct ServerRow: View {
             Divider()
             Button("Details…") { showDetails(server) }
         }
+    }
+}
+
+/// Reloads the apps attached to a Metro server, like pressing `r` in its terminal.
+/// The arrow spins while the reload goes out.
+struct ReloadButton: View {
+    @EnvironmentObject private var store: ServerStore
+    let server: DevServer
+
+    var body: some View {
+        Button { store.reloadApps(server) } label: {
+            Label("Reload", systemImage: "arrow.clockwise")
+                .symbolEffect(.rotate, isActive: store.reloading.contains(server.pid))
+        }
+        .buttonStyle(.bordered)
+        .disabled(!server.canReloadApps)
+        .help(server.canReloadApps ? "Reload the connected apps, like pressing r in Metro" : "No app connected")
     }
 }
 
@@ -156,6 +178,7 @@ struct ServerDetails: View {
                     ConfirmButton(title: "Stop Server", busy: store.stopping.contains(server.pid)) { store.stop(server) }
                 }
                 Spacer()
+                if let server, server.metro != nil { ReloadButton(server: server) }
                 if let server, server.url != nil {
                     Button("Open in Browser") { store.open(server) }
                 }
