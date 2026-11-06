@@ -29,7 +29,7 @@ final class HookInstaller: ObservableObject {
 
     func set(_ agent: AgentKind, enabled: Bool) {
         let url = Self.configURL(agent)
-        let events = try? JSONSerialization.data(withJSONObject: Self.hooks.map {
+        let events = try? JSONSerialization.data(withJSONObject: Self.hooks(for: agent).map {
             ["event": $0.event, "matcher": $0.matcher, "async": $0.async, "timeout": $0.timeout]
         })
         Task {
@@ -57,12 +57,19 @@ final class HookInstaller: ObservableObject {
     }
 
     /// `PreToolUse` waits for DevDeck's answer (the helper gives up after 540 s, under the
-    /// timeout); the others only report, in the background.
-    static let hooks: [Hook] = [
-        Hook(event: "PreToolUse", matcher: "mcp__argent__.*|Bash", async: false, timeout: 600),
-        Hook(event: "Stop", matcher: "", async: true, timeout: 3),
-        Hook(event: "SessionEnd", matcher: "", async: true, timeout: 3),
-    ]
+    /// timeout). After a shell command, the helper only asks DevDeck about a `DEVICE_IN_USE`
+    /// error, and waits a few seconds at most. `Stop` and `SessionEnd` only report, in the
+    /// background. Codex has no `PostToolUseFailure`; its `PostToolUse` covers failed calls.
+    nonisolated static func hooks(for agent: AgentKind) -> [Hook] {
+        var hooks = [
+            Hook(event: "PreToolUse", matcher: "mcp__argent__.*|Bash", async: false, timeout: 600),
+            Hook(event: "PostToolUse", matcher: "Bash", async: false, timeout: 10),
+            Hook(event: "Stop", matcher: "", async: true, timeout: 3),
+            Hook(event: "SessionEnd", matcher: "", async: true, timeout: 3),
+        ]
+        if agent == .claude { hooks.insert(Hook(event: "PostToolUseFailure", matcher: "Bash", async: false, timeout: 10), at: 2) }
+        return hooks
+    }
 
     static func configURL(_ agent: AgentKind) -> URL {
         let env = ProcessInfo.processInfo.environment
@@ -88,8 +95,9 @@ final class HookInstaller: ObservableObject {
     /// Whether the installed hooks are exactly the ones this copy of DevDeck wants.
     private func isCurrent(_ agent: AgentKind) -> Bool {
         let installed = installedHooks(in: Self.configURL(agent))
-        return installed.count == Self.hooks.count
-            && Set(installed.map(\.hook)) == Set(Self.hooks)
+        let wanted = Self.hooks(for: agent)
+        return installed.count == wanted.count
+            && Set(installed.map(\.hook)) == Set(wanted)
             && installed.allSatisfy { $0.command == Self.command(agent) }
     }
 

@@ -31,6 +31,10 @@ with your Mac's memory.
 - **Device leases.** **Hold** a device, **take it over** from an agent, or **join the
   queue** for it. Agents wait for you, and for each other. An agent that finds a device
   busy, or wants to boot another simulator while one is free, is sent to the free one.
+- **agent-device claims.** Devices claimed by [agent-device](https://www.npmjs.com/package/agent-device)
+  sessions (T3 Code's device tools) show who holds them. A claim whose agent has finished
+  is marked stale and can be released with one click, and an agent turned away with
+  `DEVICE_IN_USE` is told who holds the device and whether waiting will help.
 - **Notifications.** When an agent has to wait, a notification says which one and why,
   with **Let Through** and **Turn Away** buttons. The menu bar icon counts waiting calls.
 - **On-device markers.** A small companion app shows who's driving a simulator in the

@@ -245,5 +245,6 @@ extension View {
     ) -> some View {
         environmentObject(peon).environmentObject(devices).environmentObject(servers).environmentObject(app)
             .environmentObject(leases).environmentObject(hooks).environmentObject(leases.monitor)
+            .environmentObject(leases.claims)
     }
 }

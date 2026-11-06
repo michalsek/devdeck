@@ -29,7 +29,11 @@ enum DeviceTarget: Hashable {
 /// One agent hook call forwarded by `devdeck-hook`, reduced to what DevDeck shows:
 /// which session touched which device, with what.
 struct HookEvent: Equatable {
-    enum Kind: Equatable { case toolUse, turnEnd, sessionEnd }
+    enum Kind: Equatable {
+        case toolUse, turnEnd, sessionEnd
+        /// A shell command that ran, and agent-device turned it away with `DEVICE_IN_USE`.
+        case deviceInUse
+    }
 
     let kind: Kind
     let agent: AgentKind
@@ -45,6 +49,10 @@ struct HookEvent: Equatable {
     let releases: [DeviceTarget]
     /// Heavy work the call starts (a build, a dev server, a device boot).
     let pools: [Pool]
+    /// The `agent-device` command in the call, if any (T3 Code's device tools).
+    let agentDevice: AgentDeviceCall?
+    /// For `deviceInUse`: the agent-device session the error names as the device's holder.
+    let holder: String?
 
     init?(json: [String: Any]) {
         guard let agent = (json["agent"] as? String).flatMap(AgentKind.init),
@@ -55,6 +63,10 @@ struct HookEvent: Equatable {
         cwd = json["cwd"] as? String
         host = json["host"] as? String
 
+        let input = json["tool_input"] as? [String: Any] ?? [:]
+        let command = json["tool_name"] as? String == "Bash" ? input["command"] as? String : nil
+        agentDevice = command.flatMap(AgentDeviceCall.parse)
+
         switch json["hook_event_name"] as? String {
         case "SessionEnd", "Stop":
             kind = json["hook_event_name"] as? String == "Stop" ? .turnEnd : .sessionEnd
@@ -62,24 +74,44 @@ struct HookEvent: Equatable {
             targets = []
             releases = []
             pools = []
+            holder = nil
+        case "PostToolUse", "PostToolUseFailure":
+            // `devdeck-hook` only forwards these with the text of a DEVICE_IN_USE error.
+            guard let output = json["tool_output"] as? String, output.contains("DEVICE_IN_USE") else { return nil }
+            kind = .deviceInUse
+            action = "DEVICE_IN_USE"
+            holder = AgentDevice.holder(inError: output)
+            targets = (agentDevice?.devices ?? []).map(DeviceTarget.id)
+            releases = []
+            pools = []
         case "PreToolUse":
             let tool = json["tool_name"] as? String ?? ""
-            let input = json["tool_input"] as? [String: Any] ?? [:]
             var parsed: (action: String, targets: [DeviceTarget], releases: [DeviceTarget])?
             var pools: [Pool] = []
             if tool.hasPrefix(Self.argentPrefix) {
                 let name = String(tool.dropFirst(Self.argentPrefix.count))
                 parsed = Self.argentCall(name, input)
                 pools = Pool.forArgent(name, input)
-            } else if tool == "Bash", let command = input["command"] as? String {
+            } else if let command {
                 parsed = Self.shellCommand(command)
                 pools = Pool.forShell(command)
+                if let call = agentDevice {
+                    // The device may come from the launcher or the session's claim; LeaseStore finds it.
+                    let devices = call.devices.map(DeviceTarget.id)
+                    let previous = parsed ?? ("agent-device " + call.subcommand, [], [])
+                    parsed = call.closes
+                        ? (previous.action, previous.targets, previous.releases + devices)
+                        : (previous.action, previous.targets + devices, previous.releases)
+                }
                 if parsed == nil, !pools.isEmpty { parsed = (Self.shortName(command), [], []) }
             }
-            guard let parsed, !(parsed.targets.isEmpty && parsed.releases.isEmpty && pools.isEmpty) else { return nil }
+            guard let parsed,
+                  agentDevice != nil || !(parsed.targets.isEmpty && parsed.releases.isEmpty && pools.isEmpty)
+            else { return nil }
             kind = .toolUse
             (action, targets, releases) = parsed
             self.pools = pools
+            holder = nil
         default:
             return nil
         }

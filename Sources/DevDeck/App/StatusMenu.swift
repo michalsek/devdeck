@@ -79,7 +79,8 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
         addServers()
         menu.addItem(.separator())
-        for error in [devices.lastError, servers.lastError, peon.lastError, settings.lastError, hooks.lastError].compactMap({ $0 }) {
+        for error in [devices.lastError, leases.claims.lastError, servers.lastError, peon.lastError, settings.lastError,
+                      hooks.lastError].compactMap({ $0 }) {
             let item = NSMenuItem(title: error, action: nil, keyEquivalent: "")
             item.attributedTitle = NSAttributedString(string: error, attributes: [.foregroundColor: NSColor.systemRed])
             item.isEnabled = false
@@ -137,6 +138,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
                 .joined(separator: " · ")
             row.image = .statusDot(.systemGreen)
             let actions = NSMenu()
+            addClaims(of: device, to: actions, row: row)
             addLease(of: device, to: actions, row: row)
             if device.canStop {
                 actions.addItem(devices.busy.contains(device.id)
@@ -251,6 +253,32 @@ final class StatusMenu: NSObject, NSMenuDelegate {
             actions.addItem(hold)
         }
         actions.addItem(.separator())
+    }
+
+    /// agent-device sessions that have claimed the device. Release Claim is offered here only
+    /// for stale ones (the dashboard asks for a second click on any).
+    private func addClaims(of device: DeviceItem, to actions: NSMenu, row: NSMenuItem) {
+        let claims = leases.claims
+        let found = claims.claims(for: device)
+        guard let first = found.first else { return }
+        for status in found {
+            let state = claims.state(of: status)
+            let header = disabled("agent-device \(AgentDevice.shortName(status.claim.session))")
+            header.subtitle = ClaimText.detail(status, owner: claims.owner(of: status), state: state, now: .now)
+            header.image = NSImage(systemSymbolName: "lock.fill", accessibilityDescription: "Claimed")
+            actions.addItem(header)
+            if state.isStale {
+                let release = ActionItem("Release Claim") { [leases] in leases.releaseClaim(status) }
+                release.subtitle = "Closes the stale session so the device is free"
+                actions.addItem(release)
+            }
+        }
+        actions.addItem(.separator())
+        if leases.lease(for: device) == nil {
+            let state = claims.state(of: first)
+            row.subtitle = ClaimText.summary(first, state: state, now: .now)
+            row.image = .statusDot(state.isStale ? .systemOrange : .systemPurple)
+        }
     }
 
     /// Waiting agent calls, each with a submenu to let it go next or turn it away.

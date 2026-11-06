@@ -1,14 +1,19 @@
 import SwiftUI
 
-/// Every device someone holds or waits for: the holder, then the line (you first, then
-/// waiting agent calls in the order they'll get through), with actions for each.
+/// Every device someone holds or waits for: the holder and any agent-device claim, then the
+/// line (you first, then waiting agent calls in the order they'll get through), with
+/// actions for each.
 struct LeasesView: View {
     @EnvironmentObject private var devices: DeviceStore
     @EnvironmentObject private var leases: LeaseStore
+    @EnvironmentObject private var claims: ClaimStore
 
     var body: some View {
         Form {
             PageHeader(page: .leases)
+            if claims.lastError != nil {
+                Section { ErrorRow(errors: [claims.lastError]) }
+            }
             if busy.isEmpty {
                 Section {
                     Text(devices.loaded ? "No agent is using a device, and you hold none." : "Loading…")
@@ -17,7 +22,14 @@ struct LeasesView: View {
             }
             ForEach(busy) { device in
                 Section {
-                    HolderRow(device: device)
+                    let claimed = claims.claims(for: device)
+                    // A claim with no DevDeck lease isn't "free": the claim row says who has it.
+                    if leases.lease(for: device) != nil || claimed.isEmpty {
+                        HolderRow(device: device)
+                    }
+                    ForEach(Array(claimed.enumerated()), id: \.element.id) { index, status in
+                        ClaimRow(status: status, device: device, leaseActions: index == 0 && leases.lease(for: device) == nil)
+                    }
                     if leases.isQueued(for: device) {
                         LineRow(symbol: "person.fill", tint: .blue, title: "You", detail: "Next in line") {
                             Button("Leave Queue") { leases.leaveQueue(device) }
@@ -47,7 +59,7 @@ struct LeasesView: View {
                 } header: {
                     Text("Nobody Is Using")
                 } footer: {
-                    Text("Agents keep a device while they work. Another agent's calls wait until the first agent's turn ends or it's been quiet for 2 minutes; if a free device of the same kind is running, the agent is sent there instead. Your holds and your place in line come first. A call waits up to 9 minutes before it's turned away.")
+                    Text("Agents keep a device while they work. Another agent's calls wait until the first agent's turn ends or it's been quiet for 2 minutes; if a free device of the same kind is running, the agent is sent there instead. Your holds and your place in line come first. A call waits up to 9 minutes before it's turned away. Devices claimed by agent-device (T3 Code's device tools) are listed too: a claim nobody has used for 10 minutes after its agent's turn ended, or for 30 minutes, is marked stale, and Release Claim closes its session.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -56,10 +68,11 @@ struct LeasesView: View {
         .formStyle(.grouped)
     }
 
-    /// Running devices someone holds, queues for or waits for.
+    /// Running devices someone holds, queues for, waits for or has claimed with agent-device.
     private var busy: [DeviceItem] {
         devices.running.filter {
             leases.lease(for: $0) != nil || leases.isQueued(for: $0) || !leases.waiters(for: $0).isEmpty
+                || !claims.claims(for: $0).isEmpty
         }
     }
 
@@ -101,6 +114,32 @@ private struct HolderRow: View {
             LineRow(symbol: "circle.dashed", tint: .secondary, title: "Nobody", detail: "Free") {
                 LeaseButton(device: device)
             }
+        }
+    }
+}
+
+/// An agent-device session's claim on the device, with Release Claim.
+private struct ClaimRow: View {
+    @EnvironmentObject private var leases: LeaseStore
+    @EnvironmentObject private var claims: ClaimStore
+    let status: ClaimStatus
+    let device: DeviceItem
+    /// Hold / take over, when there's no DevDeck lease row to carry them.
+    let leaseActions: Bool
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let state = claims.state(of: status, now: context.date)
+            LineRow(
+                symbol: "lock.fill", tint: state.isStale ? .orange : .purple,
+                title: "agent-device session \(AgentDevice.shortName(status.claim.session))",
+                detail: ClaimText.detail(status, owner: claims.owner(of: status), state: state, now: context.date)
+            ) {
+                if leaseActions { LeaseButton(device: device) }
+                ConfirmButton(title: "Release Claim", busy: claims.isReleasing(status)) { leases.releaseClaim(status) }
+                    .help("Close agent-device session \(status.claim.session) so the device is free")
+            }
+            .help(ClaimHelp.text(status, owner: claims.owner(of: status)))
         }
     }
 }

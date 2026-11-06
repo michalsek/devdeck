@@ -20,6 +20,8 @@ final class LeaseStore: ObservableObject {
     private let settings: AppSettings
     private let servers: ServerStore
     let monitor: ResourceMonitor
+    /// agent-device's device claims (T3 Code's device tools).
+    let claims = ClaimStore()
     private var server: BrokerServer?
     private var timer: Timer?
     /// Hook connections of waiting calls, and the calls themselves (for the reason when
@@ -49,6 +51,10 @@ final class LeaseStore: ObservableObject {
             case .letThrough: runNow(waiter)
             case .turnAway: dismiss(waiter)
             }
+        }
+        notifier.onReleaseClaim = { [weak self] session in
+            guard let self, let status = claims.claims.first(where: { $0.claim.session == session }) else { return }
+            releaseClaim(status)
         }
         openSocket()
         timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
@@ -103,6 +109,12 @@ final class LeaseStore: ObservableObject {
         carryOut(effects)
     }
 
+    /// Closes the agent-device session that holds a claim, which frees the device.
+    func releaseClaim(_ status: ClaimStatus) {
+        notifier.clearClaim(session: status.claim.session)
+        claims.release(status)
+    }
+
     /// Lets a waiting agent call go next.
     func moveToFront(_ waiter: LeaseBook.Waiter) {
         book.moveToFront(waiter.id)
@@ -149,14 +161,27 @@ final class LeaseStore: ObservableObject {
 
         switch event.kind {
         case .sessionEnd:
+            claims.sessionEnded(session.id, now: now)
             carryOut(book.endSession(session.id, now: now))
             connection.close()
         case .turnEnd:
+            claims.turnEnded(session.id, now: now)
             carryOut(book.agentStopped(session.id, now: now))
             connection.close()
+        case .deviceInUse:
+            connection.respond(deviceInUse(event, asker: session))
         case .toolUse:
             let maxWait = (json["max_wait"] as? Double).map { min($0, Self.defaultMaxWait) } ?? Self.defaultMaxWait
-            let targets = event.targets.flatMap(resolve)
+            var targets = event.targets.flatMap(resolve)
+            var releases = event.releases.flatMap(resolve)
+            if let call = event.agentDevice {
+                // T3 Code's launcher names the device for the agent; so does the session's claim.
+                if call.devices.isEmpty {
+                    let found = claims.devices(for: call).flatMap { resolve(.id($0)) }
+                    if call.closes { releases += found } else { targets += found }
+                }
+                claims.noteCall(call, by: session, now: now)
+            }
             // Booting a device that's already running takes no room.
             let booting = Set<Pool>([.iosSimulator, .androidEmulator])
             let alreadyRunning = !targets.isEmpty && targets.allSatisfy { id in
@@ -164,7 +189,7 @@ final class LeaseStore: ObservableObject {
             }
             let waiter = LeaseBook.Waiter(
                 id: UUID(), session: session, action: event.action,
-                devices: targets, releases: event.releases.flatMap(resolve),
+                devices: targets, releases: releases,
                 since: now, deadline: now.addingTimeInterval(maxWait),
                 pools: event.pools.filter { !(booting.contains($0) && alreadyRunning) })
             updateResources()
@@ -214,6 +239,33 @@ final class LeaseStore: ObservableObject {
         return status()
     }
 
+    /// agent-device turned a command away with `DEVICE_IN_USE`: tell the agent who holds the
+    /// device and whether waiting helps, and tell the user when the holder looks abandoned.
+    private func deviceInUse(_ event: HookEvent, asker: AgentSession) -> [String: Any] {
+        guard let holder = event.holder, let status = claims.claim(heldBy: holder) else { return [:] }
+        let now = Date.now
+        let state = claims.state(of: status, now: now)
+        let owner = claims.owner(of: status)
+        let device = devices.devices.first { $0.id == status.claim.deviceID || $0.serial == status.claim.deviceID }
+        let name = device?.name ?? status.claim.deviceName
+        let free = device.map { wanted in
+            devices.running.filter {
+                $0.kind == wanted.kind && $0.kind != .physical && $0.platform == wanted.platform && $0.id != wanted.id
+                    && lease(for: $0) == nil && !isQueued(for: $0) && claims.claims(for: $0).isEmpty
+            }
+        } ?? []
+        Self.log.info("\(asker.label, privacy: .public) DEVICE_IN_USE on \(name, privacy: .public), held by \(holder, privacy: .public), \(state.isStale ? "stale" : "active", privacy: .public)")
+        if state.isStale, settings.notifyWaits {
+            notifier.staleClaim(
+                session: holder, title: "\(name) has a stale agent-device claim",
+                body: "\(asker.label) can't use it: session \(AgentDevice.shortName(holder)) (\(status.claim.project))"
+                    + " has run nothing for \(Format.age(since: status.lastActivity, now: now)).")
+        }
+        return ["context": ClaimText.advice(
+            deviceName: name, status: status, owner: owner, state: state, program: event.agentDevice?.program,
+            freeDevices: free, now: now)]
+    }
+
     private func status() -> [String: Any] {
         let leases = book.leases.values.map { lease -> [String: Any] in
             var entry: [String: Any] = ["device": lease.deviceID, "since": lease.since.timeIntervalSince1970]
@@ -233,8 +285,16 @@ final class LeaseStore: ObservableObject {
         let pools = Pool.allCases.map {
             ["pool": $0.rawValue, "used": book.used($0, now: .now), "limit": book.resources.limits[$0] ?? 0] as [String: Any]
         }
+        let claimed = claims.claims.map { status -> [String: Any] in
+            [
+                "device": status.claim.deviceID, "session": status.claim.session, "workspace": status.claim.workspace,
+                "lastActivity": status.lastActivity.timeIntervalSince1970, "stale": claims.state(of: status).isStale,
+                "agent": claims.owner(of: status)?.session.label ?? NSNull(),
+            ]
+        }
         return [
             "ok": true, "leases": leases, "queue": Array(book.queue), "waiting": waiters, "pools": pools,
+            "claims": claimed,
             "memoryFree": monitor.snapshot.memoryFree, "memoryLow": monitor.memoryLow,
         ]
     }

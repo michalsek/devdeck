@@ -3,6 +3,7 @@ import SwiftUI
 
 struct DevicesView: View {
     @EnvironmentObject private var store: DeviceStore
+    @EnvironmentObject private var claims: ClaimStore
     @State private var showStoppedSimulators = false
 
     var body: some View {
@@ -11,8 +12,8 @@ struct DevicesView: View {
             section("iOS Simulators", kind: .simulator, emptyText: "No simulators booted")
             section("Android Emulators", kind: .emulator, emptyText: "No Android emulators")
             section("Physical Devices", kind: .physical, emptyText: "No paired devices")
-            if store.lastError != nil {
-                Section { ErrorRow(errors: [store.lastError]) }
+            if store.lastError != nil || claims.lastError != nil {
+                Section { ErrorRow(errors: [store.lastError, claims.lastError]) }
             }
         }
         .formStyle(.grouped)
@@ -55,17 +56,19 @@ struct DevicesView: View {
 struct DeviceRow: View {
     @EnvironmentObject private var store: DeviceStore
     @EnvironmentObject private var leases: LeaseStore
+    @EnvironmentObject private var claims: ClaimStore
     let device: DeviceItem
 
     var body: some View {
         HStack(spacing: 10) {
-            StatusDot(tone: lease.map { $0.isUser ? .user : .agent } ?? (device.isRunning ? .running : .off))
+            StatusDot(tone: tone)
             VStack(alignment: .leading, spacing: 2) {
                 Text(device.name).lineLimit(1)
                 Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 if let lease {
                     LeaseLine(lease: lease, waiting: leases.waiters(for: device), queued: leases.isQueued(for: device))
                 }
+                ForEach(claimed) { ClaimLine(status: $0) }
             }
             Spacer(minLength: 8)
             if device.isRunning { LeaseButton(device: device) }
@@ -79,10 +82,22 @@ struct DeviceRow: View {
         .contextMenu {
             Button("Copy ID") { Pasteboard.copy(device.serial ?? device.id) }
             if lease?.isUser == false { Button("Forget This Agent") { leases.forget(device) } }
+            ForEach(claimed) { status in
+                Button("Release agent-device Claim (\(AgentDevice.shortName(status.claim.session)))") {
+                    leases.releaseClaim(status)
+                }
+            }
         }
     }
 
     private var lease: LeaseStore.Lease? { leases.lease(for: device) }
+    private var claimed: [ClaimStatus] { device.isRunning ? claims.claims(for: device) : [] }
+
+    private var tone: StatusDot.Tone {
+        if let lease { return lease.isUser ? .user : .agent }
+        if !claimed.isEmpty { return claimed.contains { claims.state(of: $0).isStale } ? .attention : .agent }
+        return device.isRunning ? .running : .off
+    }
 
     private var subtitle: String {
         var parts = [device.detail]

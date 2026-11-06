@@ -49,6 +49,35 @@ final class HookEventTests: XCTestCase {
         XCTAssertNil(shell("npm test"))
     }
 
+    func testAgentDeviceCommands() {
+        let launcher = "/Users/me/.t3/userdata/device/targets/t3-669e258bfb303ed88328cc17/agent-device"
+        // T3 Code's launcher: no device on the command line, LeaseStore finds it.
+        let open = shell("\(launcher) open com.example.app --relaunch")
+        XCTAssertEqual(open?.kind, .toolUse)
+        XCTAssertEqual(open?.action, "agent-device open")
+        XCTAssertEqual(open?.targets, [])
+        XCTAssertEqual(open?.agentDevice?.session, "t3-669e258bfb303ed88328cc17")
+
+        XCTAssertEqual(shell("agent-device --udid \(udid) press @e6")?.targets, [.id(udid)])
+        XCTAssertEqual(shell("agent-device --udid \(udid) close")?.releases, [.id(udid)])
+    }
+
+    func testDeviceInUseAfterACommand() {
+        let error = #"Error (DEVICE_IN_USE): Device is already in use by session "t3-8df3016cf2a2eca76eb84e7a"."#
+        let event = HookEvent(json: [
+            "agent": "claude", "session_id": "s1", "hook_event_name": "PostToolUseFailure", "tool_name": "Bash",
+            "tool_input": ["command": "agent-device open app"], "tool_output": error,
+        ])
+        XCTAssertEqual(event?.kind, .deviceInUse)
+        XCTAssertEqual(event?.holder, "t3-8df3016cf2a2eca76eb84e7a")
+        XCTAssertEqual(event?.agentDevice?.subcommand, "open")
+
+        XCTAssertNil(HookEvent(json: [
+            "agent": "codex", "session_id": "s1", "hook_event_name": "PostToolUse", "tool_name": "Bash",
+            "tool_input": ["command": "ls"], "tool_output": "fine",
+        ]))
+    }
+
     func testSessionEnd() {
         let end = HookEvent(json: ["agent": "claude", "session_id": "s1", "hook_event_name": "SessionEnd"])
         XCTAssertEqual(end?.kind, .sessionEnd)

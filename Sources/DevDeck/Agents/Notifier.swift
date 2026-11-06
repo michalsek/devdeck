@@ -2,7 +2,8 @@ import Foundation
 import UserNotifications
 
 /// macOS notifications for agent calls that have to wait (with Let Through and Turn Away
-/// buttons) and for devices handed over to the user.
+/// buttons), for devices handed over to the user, and for stale agent-device claims that
+/// turn an agent away (with Release Claim).
 @MainActor
 final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     enum Action: String {
@@ -14,9 +15,13 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     var onAction: ((Action, UUID) -> Void)?
     /// A click on the notification itself.
     var onOpen: ((DashboardPage) -> Void)?
+    /// Release Claim on a stale-claim notification, with the claim's agent-device session.
+    var onReleaseClaim: ((String) -> Void)?
 
     private let center = UNUserNotificationCenter.current()
     private static let waitingCategory = "waiting"
+    private static let claimCategory = "claim"
+    private static let releaseClaim = "release-claim"
 
     func setUp() {
         center.delegate = self
@@ -27,6 +32,10 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
                     UNNotificationAction(identifier: Action.letThrough.rawValue, title: "Let Through"),
                     UNNotificationAction(identifier: Action.turnAway.rawValue, title: "Turn Away", options: .destructive),
                 ],
+                intentIdentifiers: []),
+            UNNotificationCategory(
+                identifier: Self.claimCategory,
+                actions: [UNNotificationAction(identifier: Self.releaseClaim, title: "Release Claim", options: .destructive)],
                 intentIdentifiers: []),
         ])
         center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
@@ -57,6 +66,20 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         center.removeDeliveredNotifications(withIdentifiers: ["waiting-" + id.uuidString])
     }
 
+    /// A stale agent-device claim turned an agent away.
+    func staleClaim(session: String, title: String, body: String) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.categoryIdentifier = Self.claimCategory
+        content.userInfo = ["page": DashboardPage.leases.rawValue, "session": session]
+        post("claim-" + session, content)
+    }
+
+    func clearClaim(session: String) {
+        center.removeDeliveredNotifications(withIdentifiers: ["claim-" + session])
+    }
+
     func plain(_ identifier: String, title: String, body: String, page: DashboardPage) {
         let content = UNMutableNotificationContent()
         content.title = title
@@ -84,8 +107,11 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         let identifier = response.notification.request.identifier
         let action = response.actionIdentifier
         let page = (response.notification.request.content.userInfo["page"] as? String).flatMap(DashboardPage.init)
+        let session = response.notification.request.content.userInfo["session"] as? String
         await MainActor.run {
-            if let action = Action(rawValue: action),
+            if action == Self.releaseClaim, let session {
+                onReleaseClaim?(session)
+            } else if let action = Action(rawValue: action),
                let id = UUID(uuidString: identifier.replacingOccurrences(of: "waiting-", with: "")) {
                 onAction?(action, id)
             } else if action == UNNotificationDefaultActionIdentifier, let page {

@@ -57,6 +57,27 @@ enum Demo {
         ]
     }
 
+    static let maps = AgentSession(
+        agent: .claude, sessionID: "demo-3", host: "T3 Code", project: .init(name: "maps-app", subtitle: ""))
+
+    /// A T3 Code thread that finished an hour ago but left its agent-device session open on
+    /// the Pixel 9.
+    static func claims() -> ([ClaimStatus], [String: ClaimOwner]) {
+        let now = Date.now
+        let session = "t3-5c0ffee15ba5eba11d0d0a7e"
+        let json: [String: Any] = [
+            "schemaVersion": 3, "session": session, "workspace": "/Users/demo/code/maps-app",
+            "stateDir": "/Users/demo/.t3/userdata/device/agent-device", "ownerPid": 4242,
+            "device": ["id": "emulator-5554", "name": "Pixel 9"], "claimOwnerKind": "open-session",
+            "createdAtMs": (now - 5400).timeIntervalSince1970 * 1000, "updatedAtMs": (now - 3700).timeIntervalSince1970 * 1000,
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: json),
+              let claim = AgentDeviceClaim(data: data, fileName: "demo.json")
+        else { return ([], [:]) }
+        let owner = ClaimOwner(session: maps, lastCall: now - 3480, turnEnded: now - 3300)
+        return ([ClaimStatus(claim: claim, lastActivity: now - 3480)], [session: owner])
+    }
+
     static let weather = AgentSession(
         agent: .claude, sessionID: "demo-1", host: "T3 Code", project: .init(name: "weather-app", subtitle: ""))
     static let checkout = AgentSession(

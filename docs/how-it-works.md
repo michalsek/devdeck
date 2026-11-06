@@ -23,25 +23,31 @@ for the pages); closing it goes back to the menu bar only.
 
 ## Agent hooks
 
-**General → Agent Activity** adds three hooks to `~/.claude/settings.json` (and, for
+**General → Agent Activity** adds these hooks to `~/.claude/settings.json` (and, for
 Codex, `~/.codex/hooks.json`):
 
 | Hook | When | What it does |
 |---|---|---|
 | `PreToolUse` (argent tools and `Bash`) | before each call | asks DevDeck whether the call may run, and waits for the answer |
+| `PostToolUse`, `PostToolUseFailure` (`Bash`) | after a shell command | if agent-device answered `DEVICE_IN_USE`, adds what DevDeck knows about the device's holder (see agent-device claims) |
 | `Stop` | the agent's turn ended | lets queued users and waiting agents take its devices |
 | `SessionEnd` | the session ended | ends its leases |
 
+Codex has no `PostToolUseFailure`; its `PostToolUse` covers failed commands too.
+
 The hooks run `devdeck-hook`, a small helper inside the app, which talks to DevDeck over
-a socket in `~/Library/Application Support/DevDeck`. Only argent tool calls and shell
-commands that mention `simctl`, `adb`, `emulator`, a build tool or a dev server reach
-DevDeck; anything else returns at once. If DevDeck isn't running, or crashes, the helper
+a socket in `~/Library/Application Support/DevDeck`. Only argent tool calls, shell
+commands that mention `simctl`, `adb`, `emulator`, `agent-device`, a build tool or a dev
+server, and command output with a `DEVICE_IN_USE` error reach DevDeck (only the error,
+not the rest of the output); anything else returns at once. If DevDeck isn't running, or crashes, the helper
 lets every call through. DevDeck rewrites the hooks when it's updated or moved, and
 leaves the rest of the settings file as it is.
 
 DevDeck reads the device from argent's `udid` / `device_id` arguments, from
-`xcrun simctl … <udid|booted>`, `adb -s <serial>` (or the only connected device) and
-`emulator -avd <name>`. Commands that reach a device indirectly, such as `npm run ios`,
+`xcrun simctl … <udid|booted>`, `adb -s <serial>` (or the only connected device),
+`emulator -avd <name>` and `agent-device --udid / --serial`. T3 Code's device tools give
+each thread its own `agent-device` launcher, bound to one device; DevDeck reads the device
+from it, or from the claim of the launcher's session. Commands that reach a device indirectly, such as `npm run ios`,
 aren't tied to a device, but they do count as builds (see Resources).
 
 ## Leases
@@ -64,6 +70,35 @@ aren't tied to a device, but they do count as builds (see Resources).
 - A call waits up to 9 minutes. Then it's turned away, and the agent reads why and which
   devices are free. On the **Leases** page you can also let a waiting call go next
   (**Move to Front**) or turn it away now (**Turn Away**).
+
+## agent-device claims
+
+[agent-device](https://www.npmjs.com/package/agent-device), the CLI behind T3 Code's
+device tools, keeps its own lock: a session that opens a device writes a claim to
+`~/.agent-device/device-claims` (`AGENT_DEVICE_CLAIMS_DIR` moves it), and other sessions
+get `DEVICE_IN_USE` until it closes. Nothing ends a session on its own: agent-device only
+checks that the daemon holding it is alive, and T3 Code's daemon runs as long as T3 Code
+does. A thread that finishes without closing its device keeps it until someone does.
+
+- **Shown.** Every claim whose daemon is running appears on its device (Devices, Leases
+  and the menu): the session, its project, and when it last ran a command (from the
+  session's `events.ndjson`; the claim's own timestamp only moves on `open`). When DevDeck
+  has seen the agent run that session's commands, it knows the agent too.
+- **Stale.** A claim is marked stale when its agent's session has ended, when its agent's
+  turn ended and the session has been quiet for 10 minutes since, or when the session has
+  been quiet for 30 minutes.
+- **Release Claim** closes the session through its daemon (the same `close` T3 Code
+  sends, on the daemon's HTTP port with the token from its `daemon.json`), which frees
+  the device. The agent that had it has to open the device again. The dashboard asks for
+  a second click; the menu offers it only for stale claims. DevDeck never releases a claim
+  on its own, and never deletes claim files: the daemon also remembers its sessions, so
+  deleting the file wouldn't free the device.
+- **Turned away.** When agent-device turns an agent's command away with `DEVICE_IN_USE`,
+  DevDeck adds to what the agent reads: who holds the device and how long it's been
+  quiet. For a claim in use, it says to leave it alone. For a stale one, it says waiting
+  won't help, to ask the user, and which `close --session` command releases it if the user
+  agrees. Free devices of the same kind are named either way. A stale claim also posts a
+  notification with **Release Claim**.
 
 ## Notifications
 
@@ -125,6 +160,8 @@ Scripts can use the same socket as the hooks, one JSON line per connection:
 {"command": "front" | "run" | "dismiss", "waiter": "<id from status>"}
 {"command": "status"}
 ```
+
+`status` lists leases, the queue, waiting calls, resource use and agent-device claims.
 
 For example:
 
