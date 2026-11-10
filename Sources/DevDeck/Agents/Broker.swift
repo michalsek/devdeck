@@ -35,6 +35,7 @@ final class Broker: ObservableObject {
     private let notifier: Notifier
     private let activity: ActivityLog
     private let pulse: Pulse
+    private let sounds: SoundStore
     private var server: BrokerServer?
     /// "session|device|Metro pid" the agent has been warned about.
     private var metroWarned: Set<String> = []
@@ -43,7 +44,7 @@ final class Broker: ObservableObject {
     init(
         leases: LeaseStore, agents: AgentStore, claims: ClaimStore, keeper: MetroKeeper, devices: DeviceStore,
         servers: ServerStore, monitor: ResourceMonitor, settings: AppSettings, notifier: Notifier, activity: ActivityLog,
-        pulse: Pulse
+        pulse: Pulse, sounds: SoundStore
     ) {
         self.leases = leases
         self.agents = agents
@@ -56,6 +57,7 @@ final class Broker: ObservableObject {
         self.notifier = notifier
         self.activity = activity
         self.pulse = pulse
+        self.sounds = sounds
         guard !Demo.isOn else { return }
         // A call that boots a simulator or emulator, once it runs: the agent booted it.
         subscription = leases.ran.sink { [agents] waiter in
@@ -85,12 +87,15 @@ final class Broker: ObservableObject {
             return run(script, connection)
         }
         guard let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let event = HookEvent(json: json)
+              let agent = (json[HookProtocol.Field.agent] as? String).flatMap(AgentKind.init),
+              let sessionID = json["session_id"] as? String
         else { return connection.respond(.allow) }
-
         let session = AgentSession(
-            agent: event.agent, sessionID: event.sessionID, host: event.host,
-            project: ServerScanner.project(for: event.cwd, fallback: event.agent.title))
+            agent: agent, sessionID: sessionID, host: json[HookProtocol.Field.host] as? String,
+            project: ServerScanner.project(for: json["cwd"] as? String, fallback: agent.title))
+        sounds.hear(json, session: session, agentPID: (json[HookProtocol.Field.agentPID] as? Int).map(Int32.init))
+        // Events that only play sounds end here; their hook doesn't wait for an answer.
+        guard let event = HookEvent(json: json) else { return connection.close() }
         let now = Date.now
 
         switch event.kind {

@@ -36,6 +36,7 @@ Codex, `~/.codex/hooks.json`):
 | `PostToolUse`, `PostToolUseFailure` (`Bash`) | after a shell command | if agent-device answered `DEVICE_IN_USE`, adds what DevDeck knows about the device's holder (see agent-device claims); after a device build, install or launch, reports how it went |
 | `Stop` | the agent's turn ended | lets queued users and waiting agents take its devices |
 | `SessionEnd` | the session ended | ends its leases |
+| `SessionStart`, `UserPromptSubmit`, `Notification`, `PermissionRequest`, `PreCompact` (Claude Code, with sounds on) | as named | plays agent sounds, in the background |
 
 Codex has no `PostToolUseFailure`; its `PostToolUse` covers failed commands too.
 
@@ -243,9 +244,26 @@ echo '{"command": "status"}' | nc -U ~/Library/Application\ Support/DevDeck/brok
 
 ## Agent sounds
 
-DevDeck reads and writes peon-ping's own `config.json` and `.paused` files, so changes
-made with the `peon` CLI show up in the app and the other way round. Per-sound volume and
-per-app control need a `peon.sh` that supports `category_volumes` / `disabled_clients`;
-with an older one those controls are disabled. `CLAUDE_PEON_DIR` points DevDeck at a
-different peon-ping data folder. Without peon-ping, the sound controls are hidden, and
-they appear once it's installed.
+With **Play agent sounds** on, the hooks also report the events that play sounds, and
+DevDeck plays them itself (no player or script runs per event). The categories and rules
+are peon-ping's:
+
+| Event | Sound | Notification |
+|---|---|---|
+| Session start (not after compaction) | `session.start`, once per 30 s across sessions | |
+| Prompt | `task.acknowledge` (off by default); the third within 10 s plays `user.spam` | clears the session's |
+| Turn ended (`Stop`), or idle reminder | `task.complete`; stops within 5 s play once; an idle reminder doesn't repeat one the session played | Done |
+| Permission request, question | `input.required` | Needs approval: *tool*, Question pending |
+| Shell command failed | `task.error` | |
+| Context compaction | `resource.limit` | Compacting context |
+
+Events replayed within 3 s of a session start (`claude -c`) are silent. A notification
+isn't shown while the agent's app (its first ancestor that's a regular app) is in front,
+and clicking one brings that app forward. Codex only reports `Stop`, so it plays
+`task.complete`.
+
+Packs and settings live in `~/Library/Application Support/DevDeck/Sounds` (`Packs/`,
+`settings.json`); new packs show up as soon as they're copied there. **Switch from
+peon-ping** (or `--sounds on`) copies peon-ping's packs and its volume, pack, category and
+notification settings, and removes its hooks (the agent config is kept as
+`settings.json.before-devdeck`); peon-ping's own files are left for you to remove.

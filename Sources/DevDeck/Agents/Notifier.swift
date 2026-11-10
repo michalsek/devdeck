@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import UserNotifications
 
@@ -110,6 +111,22 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         post(identifier, content)
     }
 
+    /// An agent finished or needs the user (from its sound events). One per session, replaced
+    /// by the next; clicking it brings the agent's app forward.
+    func agent(session: String, title: String, body: String, app: pid_t?) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.threadIdentifier = "agents"
+        if let app { content.userInfo = ["app": Int(app)] }
+        post("agent-" + session, content)
+    }
+
+    /// The user is back at the session (a new prompt): its banner is old news.
+    func clearAgent(session: String) {
+        center.removeDeliveredNotifications(withIdentifiers: ["agent-" + session])
+    }
+
     private func post(_ identifier: String, _ content: UNNotificationContent) {
         center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: nil))
     }
@@ -131,6 +148,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         let page = (response.notification.request.content.userInfo["page"] as? String).flatMap(DashboardPage.init)
         let session = response.notification.request.content.userInfo["session"] as? String
         let agentSession = response.notification.request.content.userInfo["agentSession"] as? String
+        let app = response.notification.request.content.userInfo["app"] as? Int
         await MainActor.run {
             if action == Self.releaseClaim, let session {
                 onReleaseClaim?(session)
@@ -141,6 +159,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
                 onAction?(action, id)
             } else if action == UNNotificationDefaultActionIdentifier, let page {
                 onOpen?(page)
+            } else if action == UNNotificationDefaultActionIdentifier, let app {
+                NSRunningApplication(processIdentifier: pid_t(app))?.activate()
             }
         }
     }

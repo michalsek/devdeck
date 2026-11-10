@@ -44,7 +44,7 @@ struct SoundPack: Identifiable, Hashable {
             let entries = (value as? [String: Any])?["sounds"] as? [[String: Any]] ?? []
             sounds[category] = entries.compactMap { entry in
                 guard let file = entry["file"] as? String, !file.isEmpty else { return nil }
-                // Same resolution as peon.sh: bare names live in sounds/, paths are pack-relative.
+                // Bare names live in sounds/, paths are pack-relative (as in peon-ping).
                 let url = file.contains("/")
                     ? dir.appendingPathComponent(file)
                     : dir.appendingPathComponent("sounds").appendingPathComponent(file)
@@ -52,45 +52,5 @@ struct SoundPack: Identifiable, Hashable {
             }
         }
         return SoundPack(id: name, displayName: json["display_name"] as? String ?? name, sounds: sounds)
-    }
-}
-
-enum ClientCatalog {
-    /// Clients always offered in the UI, in display order.
-    static let pinned = ["claude", "t3code", "codex", "cursor", "opencode", "gemini", "copilot", "windsurf"]
-
-    static let displayNames: [String: String] = [
-        "claude": "Claude Code",
-        "t3code": "T3 Code",
-        "codex": "OpenAI Codex",
-        "cursor": "Cursor",
-        "opencode": "OpenCode",
-        "kilo": "Kilo CLI",
-        "kiro": "Kiro",
-        "kiro-ide": "Kiro IDE",
-        "gemini": "Gemini CLI",
-        "copilot": "GitHub Copilot",
-        "windsurf": "Windsurf",
-        "kimi": "Kimi Code",
-        "antigravity": "Antigravity",
-        "amp": "Amp",
-        "deepagents": "DeepAgents",
-        "openclaw": "OpenClaw",
-        "rovodev": "Rovo Dev CLI",
-        "omp": "oh-my-pi",
-        "qwen": "Qwen Code",
-        "iflow": "iFlow CLI",
-        "trae": "Trae",
-        "eca": "ECA",
-        "grok": "Grok Build",
-    ]
-
-    static let details: [String: String] = [
-        "claude": "Claude Code in a terminal or IDE",
-        "t3code": "Any agent running inside T3 Code",
-    ]
-
-    static func name(for id: String) -> String {
-        displayNames[id] ?? id.replacingOccurrences(of: "-", with: " ").capitalized
     }
 }

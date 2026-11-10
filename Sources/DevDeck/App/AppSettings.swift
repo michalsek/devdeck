@@ -1,7 +1,7 @@
 import Foundation
 import ServiceManagement
 
-/// App-level settings that aren't peon-ping's.
+/// App-level settings (sound settings live in `SoundStore`).
 @MainActor
 final class AppSettings: ObservableObject {
     @Published private(set) var launchAtLogin = SMAppService.mainApp.status == .enabled

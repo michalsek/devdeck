@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// A slider that edits a local copy while dragging and commits once on release,
-/// so each drag costs one config write instead of dozens.
+/// so each drag costs one settings write instead of dozens.
 struct CommitSlider: View {
     let value: Double
     let commit: (Double) -> Void
@@ -56,7 +56,7 @@ struct PreviewButton: View {
 /// One row per sound category: on/off, volume relative to master, preview.
 /// Compact (menu) puts everything on one line; detailed (dashboard) adds the description.
 struct CategoryRow: View {
-    @EnvironmentObject private var store: PeonStore
+    @EnvironmentObject private var store: SoundStore
     let category: SoundCategory
     var showsDetail = false
 
@@ -101,7 +101,7 @@ struct CategoryRow: View {
         CommitSlider(
             value: store.volume(for: category),
             commit: { store.setVolume($0, for: category) },
-            disabled: !enabled || !store.supportsClientControls
+            disabled: !enabled
         )
     }
 

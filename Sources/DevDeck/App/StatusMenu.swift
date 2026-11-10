@@ -9,7 +9,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let menu = NSMenu()
     private let stores: Stores
-    private let peon: PeonStore
+    private let sounds: SoundStore
     private let devices: DeviceStore
     private let servers: ServerStore
     private let settings: AppSettings
@@ -23,7 +23,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
 
     init(stores: Stores, markers: MarkerController, openDashboard: @escaping (DashboardPage?) -> Void) {
         self.stores = stores
-        peon = stores.peon
+        sounds = stores.sounds
         devices = stores.devices
         servers = stores.servers
         settings = stores.settings
@@ -41,11 +41,11 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         item.menu = menu
         item.button?.imagePosition = .imageLeading
 
-        Publishers.CombineLatest4(peon.$paused, servers.$servers, settings.$menuBarIcon, leases.$book)
+        Publishers.CombineLatest4(sounds.$settings, servers.$servers, settings.$menuBarIcon, leases.$book)
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] paused, servers, icon, book in
+            .sink { [weak self] sounds, servers, icon, book in
                 self?.updateButton(
-                    paused: paused, count: servers.filter { $0.group == .devServer }.count, icon: icon,
+                    paused: sounds.enabled && sounds.muted, count: servers.filter { $0.group == .devServer }.count, icon: icon,
                     driven: book.leases.values.filter { !$0.isUser }.count,
                     held: book.leases.values.filter(\.isUser).count, waiting: book.waiters.count)
             }
@@ -75,7 +75,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
-        if peon.installed {
+        if sounds.settings.enabled {
             addSounds()
             menu.addItem(.separator())
         }
@@ -83,7 +83,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
         addServers()
         menu.addItem(.separator())
-        for error in [devices.lastError, claims.lastError, servers.lastError, peon.lastError, settings.lastError,
+        for error in [devices.lastError, claims.lastError, servers.lastError, sounds.lastError, settings.lastError,
                       hooks.lastError].compactMap({ $0 }) {
             let item = NSMenuItem(title: error, action: nil, keyEquivalent: "")
             item.attributedTitle = NSAttributedString(string: error, attributes: [.foregroundColor: NSColor.systemRed])
@@ -106,20 +106,20 @@ final class StatusMenu: NSObject, NSMenuDelegate {
 
     private func addSounds() {
         menu.addItem(.sectionHeader(title: "Agent Sounds"))
-        let mute = ActionItem("Mute All Sounds") { [peon] in peon.setPaused(!peon.paused) }
-        mute.state = peon.paused ? .on : .off
+        let mute = ActionItem("Mute All Sounds") { [sounds] in sounds.setMuted(!sounds.settings.muted) }
+        mute.state = sounds.settings.muted ? .on : .off
         menu.addItem(mute)
         menu.addItem(hosted(MenuVolumeRow()))
 
         let pack = NSMenuItem(title: "Voice Pack", action: nil, keyEquivalent: "")
-        pack.subtitle = peon.activePack?.displayName
+        pack.subtitle = sounds.activePack?.displayName
         let packs = NSMenu()
-        for option in peon.packs {
-            let item = ActionItem(option.displayName) { [peon] in peon.usePack(option.id) }
-            item.state = option.id == peon.defaultPack ? .on : .off
+        for option in sounds.packs {
+            let item = ActionItem(option.displayName) { [sounds] in sounds.usePack(option.id) }
+            item.state = option.id == sounds.activePack?.id ? .on : .off
             packs.addItem(item)
         }
-        if peon.packs.isEmpty { packs.addItem(disabled("No packs installed")) }
+        if sounds.packs.isEmpty { packs.addItem(disabled("No packs installed")) }
         packs.addItem(.separator())
         packs.addItem(ActionItem("Manage Voice Packs…") { [weak self] in self?.openDashboard(.packs) })
         pack.submenu = packs
@@ -380,14 +380,14 @@ enum Pasteboard {
 }
 
 private struct MenuVolumeRow: View {
-    @EnvironmentObject private var peon: PeonStore
+    @EnvironmentObject private var sounds: SoundStore
 
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "speaker.fill").foregroundStyle(.secondary)
-            CommitSlider(value: peon.volume, commit: peon.setVolume)
+            CommitSlider(value: sounds.settings.volume, commit: sounds.setVolume)
         }
-        .disabled(peon.paused)
+        .disabled(sounds.settings.muted)
         .padding(.horizontal, 14)
         .padding(.vertical, 4)
     }

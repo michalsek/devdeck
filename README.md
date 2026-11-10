@@ -56,8 +56,10 @@ with your Mac's memory.
   plus a low-memory and swap check: agents wait for room instead of grinding your Mac to a halt.
   It also stops idle Gradle and Kotlin daemons, and can run builds at background
   priority while you're at the Mac.
-- **Agent sounds.** Volume, voice packs and per-sound settings for
-  [peon-ping](https://github.com/PeonPing/peon-ping), if you use it.
+- **Agent sounds.** A voice line when an agent starts, finishes, fails or needs you, and a
+  notification unless its app is in front. Uses [peon-ping](https://github.com/PeonPing/peon-ping)
+  voice packs; **Switch from peon-ping** moves its packs and settings over. See
+  [adding sound packs](docs/sound-packs.md).
 - **Native.** A real macOS menu and a dashboard laid out like System Settings, with
   Liquid Glass on macOS 26.
 
@@ -77,7 +79,7 @@ with your Mac's memory.
 - Optional: the Android SDK for emulators and Android devices,
   [Claude Code](https://claude.com/claude-code) for agent activity and leases,
   [argent](https://github.com/software-mansion/argent) (DevDeck understands its device
-  tools), and [peon-ping](https://github.com/PeonPing/peon-ping) for agent sounds.
+  tools).
 
 ## Build and install
 

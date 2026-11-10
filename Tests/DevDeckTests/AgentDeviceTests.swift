@@ -159,9 +159,13 @@ final class AgentDeviceTests: XCTestCase {
         XCTAssertEqual(found.first?.lastActivity.timeIntervalSince1970 ?? 0, logged.timeIntervalSince1970, accuracy: 1)
     }
 
-    func testCodexGetsNoFailureHook() {
+    /// Codex has no failure hook; Claude Code's sound events are hooked only with sounds on.
+    func testHooksPerAgent() {
         XCTAssertTrue(HookInstaller.hooks(for: .claude).contains { $0.event == "PostToolUseFailure" })
         XCTAssertFalse(HookInstaller.hooks(for: .codex).contains { $0.event == "PostToolUseFailure" })
         XCTAssertTrue(HookInstaller.hooks(for: .codex).contains { $0.event == "PostToolUse" && $0.matcher == "Bash" })
+        XCTAssertFalse(HookInstaller.hooks(for: .claude).contains { $0.event == "SessionStart" })
+        XCTAssertTrue(HookInstaller.hooks(for: .claude, sounds: true).contains { $0.event == "SessionStart" && $0.async })
+        XCTAssertFalse(HookInstaller.hooks(for: .codex, sounds: true).contains { $0.event == "SessionStart" })
     }
 }

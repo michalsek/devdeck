@@ -1,8 +1,8 @@
 // devdeck-hook <agent>
 //
 // Installed as an agent hook (Claude Code, Codex). Reads the hook's JSON from stdin and
-// forwards device-related tool calls, turn ends and session ends to DevDeck's socket
-// (see `HookProtocol`).
+// forwards device-related tool calls, turn ends, session ends and the events that play
+// agent sounds to DevDeck's socket (see `HookProtocol`).
 //
 // For a tool call DevDeck may hold the answer back while the user has the device; the
 // hook then waits (up to `maxWait`). If DevDeck refuses the call, the hook prints the
@@ -45,6 +45,7 @@ event[HookProtocol.Field.agentPID] = Int(getppid())
 if eventName == "PreToolUse" { event[HookProtocol.Field.path] = environment["PATH"] }
 if environment["T3CODE_CLI_PATH"] != nil { event[HookProtocol.Field.host] = "T3 Code" }
 event.removeValue(forKey: "transcript_path")
+event.removeValue(forKey: "prompt")
 guard var line = try? JSONSerialization.data(withJSONObject: event) else { exit(0) }
 line.append(0x0A)
 

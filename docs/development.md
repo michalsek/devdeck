@@ -33,11 +33,12 @@ echo 'DEVDECK_SIGN_IDENTITY="Apple Development: Your Name (TEAMID)"' > .signing
 ```bash
 open ~/Applications/DevDeck.app --args --open dashboard:leases   # open a dashboard page
 open ~/Applications/DevDeck.app --args --hooks claude            # install hooks (claude, codex, or none)
+open ~/Applications/DevDeck.app --args --sounds on               # play agent sounds (switches from peon-ping), or off
 open build/DevDeck.app --args --demo --open dashboard:devices    # demo mode
 ```
 
 Dashboard pages: `agents`, `devices`, `leases`, `resources`, `servers`, `activity`, `sounds`, `packs`,
-`clients`, `general`.
+`general`.
 
 **Demo mode** fills DevDeck with made-up devices, servers, leases and load, for
 screenshots, and changes nothing: no socket for agents, no hook updates, no companion
@@ -53,7 +54,7 @@ first. The screenshots in the README come from demo mode.
 | `Sources/DevDeck/Servers` | dev server scanning, stopping and the Dev Servers page |
 | `Sources/DevDeck/Agents` | hook events, the broker socket, lease rules (`LeaseBook`), hook installer, device markers, the Leases page |
 | `Sources/DevDeck/Pools` | resource limits, the resource monitor and the Resources page |
-| `Sources/DevDeck/Sounds` | peon-ping settings |
+| `Sources/DevDeck/Sounds` | agent sounds: event rules (`SoundRouter`), packs, playback, the Sounds and Voice Packs pages |
 | `Sources/DevDeck/Demo` | demo mode data |
 | `Sources/devdeck-hook` | the helper the agent hooks run |
 | `Sources/DevDeckProtocol` | what the helper and the app share: the socket, timeouts, the reply, which calls reach DevDeck, and the shell command reader |

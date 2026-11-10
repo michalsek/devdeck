@@ -7,6 +7,9 @@ import SwiftUI
 @main
 enum DevDeckMain {
     static func main() {
+        // A hook, script or tool that hangs up before DevDeck answers makes a write fail
+        // with EPIPE; it must not end the app.
+        signal(SIGPIPE, SIG_IGN)
         MainActor.assumeIsolated {
             // One DevDeck at a time: a second copy would take over the agents' socket.
             let others = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
@@ -30,8 +33,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     lazy var markers = MarkerController(leases: stores.leases, devices: stores.devices, settings: stores.settings)
 
     private var statusMenu: StatusMenu?
-    private var pageItems: [DashboardPage: NSMenuItem] = [:]
-    private var subscriptions = Set<AnyCancellable>()
     private lazy var dashboard = DashboardWindow(pulse: stores.pulse) { [unowned self] in
         AnyView(DashboardView().environment(stores))
     }
@@ -39,9 +40,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = mainMenu()
         stores.notifier.onOpen = { [unowned self] page in dashboard.show(page) }
-        stores.peon.$installed.removeDuplicates()
-            .sink { [unowned self] installed in updatePageItems(peonInstalled: installed) }
-            .store(in: &subscriptions)
         statusMenu = StatusMenu(
             stores: stores, markers: markers, openDashboard: { [unowned self] page in dashboard.show(page) })
         handleLaunchArguments()
@@ -55,9 +53,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// `--open dashboard[:page]`, e.g. `open -a DevDeck --args --open dashboard:servers`.
     /// Handy for screenshots. `--hooks claude,codex` (or `--hooks none`) sets up the
-    /// agent hooks without the dashboard.
+    /// agent hooks without the dashboard. `--sounds on` plays agent sounds (switching from
+    /// peon-ping if it's installed), `--sounds off` stops.
     private func handleLaunchArguments() {
         let args = CommandLine.arguments
+        if let index = args.firstIndex(of: "--sounds"), index + 1 < args.count {
+            let on = args[index + 1] == "on"
+            if on, !stores.sounds.settings.enabled, SoundStore.peonPingFolder != nil {
+                Task { await stores.sounds.switchFromPeonPing(hooks: stores.hooks) }
+            } else {
+                stores.sounds.setEnabled(on)
+            }
+        }
         if let index = args.firstIndex(of: "--hooks"), index + 1 < args.count {
             let wanted = Set(args[index + 1].split(separator: ",").compactMap { AgentKind(rawValue: String($0)) })
             for agent in AgentKind.allCases where stores.hooks.isAvailable(agent) {
@@ -109,10 +116,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item("Paste", #selector(NSText.paste(_:)), "v"),
             item("Select All", #selector(NSText.selectAll(_:)), "a"),
         ])
-        let pages = DashboardPage.allCases.map { page in
-            ActionItem(page.title) { [unowned self] in dashboard.show(page) }
+        let pages = DashboardPage.allCases.enumerated().map { index, page in
+            ActionItem(page.title, key: "\(index + 1)") { [unowned self] in dashboard.show(page) }
         }
-        pageItems = Dictionary(uniqueKeysWithValues: zip(DashboardPage.allCases, pages))
         _ = submenu("View", pages + [
             .separator(),
             item("Toggle Sidebar", #selector(NSSplitViewController.toggleSidebar(_:)), "s", [.command, .control]),
@@ -126,21 +132,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item("Bring All to Front", #selector(NSApplication.arrangeInFront(_:))),
         ])
         return main
-    }
-
-    /// Hides the peon-ping pages without peon-ping, and numbers ⌘1, ⌘2… over the visible ones.
-    private func updatePageItems(peonInstalled: Bool) {
-        var number = 0
-        for page in DashboardPage.allCases {
-            guard let item = pageItems[page] else { continue }
-            item.isHidden = page.needsPeon && !peonInstalled
-            if item.isHidden {
-                item.keyEquivalent = ""
-            } else {
-                number += 1
-                item.keyEquivalent = "\(number)"
-            }
-        }
     }
 }
 
@@ -201,23 +192,27 @@ final class DashboardWindow: NSObject, NSWindowDelegate {
 @MainActor
 struct Stores {
     let pulse = Pulse()
-    let peon = PeonStore()
     let devices = DeviceStore()
     let servers = ServerStore()
     let settings = AppSettings()
     let monitor = ResourceMonitor()
     let claims = ClaimStore()
     let notifier = Notifier()
-    let hooks = HookInstaller()
     let activity = ActivityLog()
+    let sounds: SoundStore
+    let hooks: HookInstaller
     let leases: LeaseStore
     let agents: AgentStore
     let keeper: MetroKeeper
     let broker: Broker
     let metroWatcher: MetroWatcher
+    /// Keeps the agents' hooks in step with whether DevDeck plays sounds.
+    private var soundHooks: AnyCancellable?
 
     init() {
         if !Demo.isOn { notifier.setUp() }
+        sounds = SoundStore(notifier: notifier)
+        hooks = HookInstaller(sounds: sounds.settings.enabled)
         leases = LeaseStore(
             devices: devices, settings: settings, servers: servers, monitor: monitor, claims: claims, notifier: notifier,
             activity: activity)
@@ -227,10 +222,11 @@ struct Stores {
         keeper = MetroKeeper(servers: servers, activity: activity)
         broker = Broker(
             leases: leases, agents: agents, claims: claims, keeper: keeper, devices: devices, servers: servers,
-            monitor: monitor, settings: settings, notifier: notifier, activity: activity, pulse: pulse)
+            monitor: monitor, settings: settings, notifier: notifier, activity: activity, pulse: pulse, sounds: sounds)
         metroWatcher = MetroWatcher(
             devices: devices, servers: servers, leases: leases, notifier: notifier, activity: activity)
         guard !Demo.isOn else { return }
+        soundHooks = sounds.$settings.map(\.enabled).removeDuplicates().sink { [hooks] in hooks.sounds = $0 }
         pulse.hasWork = { [leases] in !leases.book.waiters.isEmpty }
         pulse.start([
             { [devices] in Task { await devices.refresh() } },
@@ -239,14 +235,13 @@ struct Stores {
             claims.refresh,
             leases.tick,
             broker.reopenSocketIfStale,
-            peon.reload,
         ])
     }
 }
 
 extension View {
     func environment(_ stores: Stores) -> some View {
-        environmentObject(stores.peon).environmentObject(stores.devices).environmentObject(stores.servers)
+        environmentObject(stores.sounds).environmentObject(stores.devices).environmentObject(stores.servers)
             .environmentObject(stores.settings).environmentObject(stores.leases).environmentObject(stores.hooks)
             .environmentObject(stores.monitor).environmentObject(stores.claims).environmentObject(stores.activity)
             .environmentObject(stores.agents).environmentObject(stores.keeper).environmentObject(stores.broker)

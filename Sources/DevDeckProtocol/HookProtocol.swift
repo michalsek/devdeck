@@ -76,10 +76,13 @@ public enum HookProtocol {
     ]
 
     /// Whether DevDeck needs to hear about this hook event. Cheap, so the hook can return
-    /// at once for everything else.
+    /// at once for everything else. The sound events are only hooked while DevDeck plays
+    /// sounds; a failed shell command plays one too.
     public static func isRelevant(_ event: [String: Any]) -> Bool {
         switch event["hook_event_name"] as? String {
-        case "SessionEnd", "Stop":
+        case "SessionEnd", "Stop", "SessionStart", "UserPromptSubmit", "Notification", "PermissionRequest", "PreCompact":
+            return true
+        case "PostToolUseFailure" where event["tool_name"] as? String == "Bash":
             return true
         case "PostToolUse", "PostToolUseFailure":
             return deviceInUseOutput(event) != nil || resultOutput(event) != nil

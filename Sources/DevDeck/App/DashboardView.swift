@@ -2,7 +2,7 @@ import DevDeckProtocol
 import SwiftUI
 
 enum DashboardPage: String, Hashable, CaseIterable {
-    case agents, devices, leases, resources, servers, activity, sounds, packs, clients, general
+    case agents, devices, leases, resources, servers, activity, sounds, packs, general
 
     static let storageKey = "dashboardPage"
 
@@ -16,7 +16,6 @@ enum DashboardPage: String, Hashable, CaseIterable {
         case .activity: "Activity"
         case .sounds: "Agent Sounds"
         case .packs: "Voice Packs"
-        case .clients: "Agent Apps"
         case .general: "General"
         }
     }
@@ -31,7 +30,6 @@ enum DashboardPage: String, Hashable, CaseIterable {
         case .activity: "list.bullet.rectangle.fill"
         case .sounds: "speaker.wave.2.fill"
         case .packs: "person.wave.2.fill"
-        case .clients: "app.connected.to.app.below.fill"
         case .general: "gearshape.fill"
         }
     }
@@ -46,7 +44,6 @@ enum DashboardPage: String, Hashable, CaseIterable {
         case .activity: .brown
         case .sounds: .pink
         case .packs: .orange
-        case .clients: .purple
         case .general: .gray
         }
     }
@@ -59,15 +56,11 @@ enum DashboardPage: String, Hashable, CaseIterable {
         case .leases: "Who is using each simulator and device, and who's waiting for it. Agents wait for you, and for each other."
         case .servers: "Dev servers running on this Mac, found by their listening ports. Stop the ones that are left over."
         case .activity: "What DevDeck decided about your agents: calls that waited or were turned away, what you did, and what was cleaned up."
-        case .sounds: "The sounds peon-ping plays when a coding agent finishes, fails or needs your input."
+        case .sounds: "Sounds and notifications when a coding agent finishes, fails or needs your input."
         case .packs: "The voice that plays agent sounds. Click a pack to use it, or the play button to hear it."
-        case .clients: "Choose which coding agents and apps can play sounds and show notifications."
         case .general: "Start-up options and the menu bar icon."
         }
     }
-
-    /// The peon-ping pages, hidden when peon-ping isn't installed.
-    var needsPeon: Bool { [.sounds, .packs, .clients].contains(self) }
 }
 
 struct DashboardView: View {
@@ -75,15 +68,11 @@ struct DashboardView: View {
     @EnvironmentObject private var devices: DeviceStore
     @EnvironmentObject private var leases: LeaseStore
     @EnvironmentObject private var servers: ServerStore
-    @EnvironmentObject private var peon: PeonStore
-    @AppStorage(DashboardPage.storageKey) private var storedPage: DashboardPage = .servers
-
-    /// The stored page, unless it's a peon-ping page and peon-ping isn't installed.
-    private var page: DashboardPage { storedPage.needsPeon && !peon.installed ? .servers : storedPage }
+    @AppStorage(DashboardPage.storageKey) private var page: DashboardPage = .servers
 
     var body: some View {
         NavigationSplitView {
-            List(selection: Binding(get: { page }, set: { if let value = $0 { storedPage = value } })) {
+            List(selection: Binding(get: { page }, set: { if let value = $0 { page = value } })) {
                 Section {
                     row(.agents, badge: agents.records.values.filter { $0.ended == nil }.count)
                     row(.devices, badge: devices.running.count)
@@ -92,12 +81,9 @@ struct DashboardView: View {
                     row(.servers, badge: servers.devServers.count)
                     row(.activity)
                 }
-                if peon.installed {
-                    Section {
-                        row(.sounds)
-                        row(.packs)
-                        row(.clients)
-                    }
+                Section {
+                    row(.sounds)
+                    row(.packs)
                 }
                 Section {
                     row(.general)
@@ -116,7 +102,6 @@ struct DashboardView: View {
                 case .activity: ActivityView()
                 case .sounds: SoundsView()
                 case .packs: PacksView()
-                case .clients: ClientsView()
                 case .general: GeneralView()
                 }
             }
@@ -193,7 +178,7 @@ struct ErrorRow: View {
 
 struct GeneralView: View {
     @EnvironmentObject private var app: AppSettings
-    @EnvironmentObject private var peon: PeonStore
+    @EnvironmentObject private var sounds: SoundStore
     @EnvironmentObject private var hooks: HookInstaller
 
     var body: some View {
@@ -211,25 +196,13 @@ struct GeneralView: View {
                 .fixedSize()
             } footer: {
                 Text("The number next to the menu bar icon is how many dev servers are running."
-                    + (peon.installed ? " The icon dims while sounds are muted." : ""))
+                    + (sounds.settings.enabled ? " The icon dims while sounds are muted." : ""))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             AgentHooksSection()
-            if peon.installed {
-                Section("peon-ping") {
-                    LabeledContent("Version", value: peon.version.isEmpty ? "unknown" : peon.version)
-                    LabeledContent("Data folder") {
-                        Text(peon.peonDir.path).textSelection(.enabled)
-                    }
-                    HStack {
-                        Spacer()
-                        Button("Open config.json") { peon.openConfig() }
-                    }
-                }
-            }
-            if app.lastError != nil || peon.lastError != nil || hooks.lastError != nil {
-                Section { ErrorRow(errors: [app.lastError, peon.lastError, hooks.lastError]) }
+            if app.lastError != nil || sounds.lastError != nil || hooks.lastError != nil {
+                Section { ErrorRow(errors: [app.lastError, sounds.lastError, hooks.lastError]) }
             }
         }
         .formStyle(.grouped)

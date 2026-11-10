@@ -11,11 +11,20 @@ final class HookInstaller: ObservableObject {
 
     @Published private(set) var installed: Set<AgentKind> = []
     @Published private(set) var lastError: String?
+    /// DevDeck plays agent sounds, so the installed hooks include the sound events.
+    var sounds: Bool {
+        didSet { if sounds != oldValue { updateOutdated() } }
+    }
 
-    init() {
+    init(sounds: Bool) {
+        self.sounds = sounds
         refresh()
-        // The app may have moved, or this version wants different hooks; bring them up to
-        // date. Only from an app bundle, so a debug run doesn't take the hooks over.
+        updateOutdated()
+    }
+
+    /// The app may have moved, or this version wants different hooks: bring them up to
+    /// date. Only from an app bundle, so a debug run doesn't take the hooks over.
+    private func updateOutdated() {
         guard Bundle.main.bundleURL.pathExtension == "app", !Demo.isOn else { return }
         for agent in installed where !isCurrent(agent) {
             Self.log.info("\(agent.rawValue, privacy: .public): hooks out of date, updating")
@@ -30,17 +39,36 @@ final class HookInstaller: ObservableObject {
 
     func set(_ agent: AgentKind, enabled: Bool) {
         let url = Self.configURL(agent)
-        let events = try? JSONSerialization.data(withJSONObject: Self.hooks(for: agent).map {
+        let events = try? JSONSerialization.data(withJSONObject: Self.hooks(for: agent, sounds: sounds).map {
             ["event": $0.event, "matcher": $0.matcher, "async": $0.async, "timeout": $0.timeout]
         })
         Task {
             let result = await Shell.run("/usr/bin/env", [
-                "python3", "-I", "-c", Self.editScript, url.path, Self.command(agent), enabled ? "1" : "0",
-                String(decoding: events ?? Data(), as: UTF8.self),
+                "python3", "-I", "-c", Self.editScript, url.path, "devdeck-hook", Self.command(agent),
+                enabled ? "1" : "0", String(decoding: events ?? Data(), as: UTF8.self),
             ])
             lastError = result.ok ? nil : "\(agent.title) hooks: " + result.output.trimmingCharacters(in: .whitespacesAndNewlines)
             Self.log.info("\(agent.rawValue, privacy: .public): hooks \(enabled ? "installed" : "removed", privacy: .public), status \(result.status)")
             refresh()
+        }
+    }
+
+    /// Removes another tool's hooks (every handler whose command contains `marker`) from
+    /// each agent's config, keeping a copy of the file as it was next to it.
+    func removeHooks(containing marker: String) async {
+        for agent in AgentKind.allCases where isAvailable(agent) {
+            let url = Self.configURL(agent)
+            guard let text = try? String(contentsOf: url, encoding: .utf8), text.contains(marker) else { continue }
+            // A copy keeps the file's permissions (agent configs can hold tokens).
+            let backup = url.appendingPathExtension("before-devdeck")
+            try? FileManager.default.removeItem(at: backup)
+            try? FileManager.default.copyItem(at: url, to: backup)
+            let result = await Shell.run("/usr/bin/env", [
+                "python3", "-I", "-c", Self.editScript, url.path, marker, "", "0", "[]",
+            ])
+            if !result.ok {
+                lastError = "\(agent.title) hooks: " + result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
         }
     }
 
@@ -60,14 +88,20 @@ final class HookInstaller: ObservableObject {
     /// `PreToolUse` waits for DevDeck's answer (the helper gives up before the timeout). After a shell command, the helper only asks DevDeck about a `DEVICE_IN_USE`
     /// error, and waits a few seconds at most. `Stop` and `SessionEnd` only report, in the
     /// background. Codex has no `PostToolUseFailure`; its `PostToolUse` covers failed calls.
-    nonisolated static func hooks(for agent: AgentKind) -> [Hook] {
+    /// With sounds on, Claude Code also reports the events that play them, in the background.
+    nonisolated static func hooks(for agent: AgentKind, sounds: Bool = false) -> [Hook] {
         var hooks = [
             Hook(event: "PreToolUse", matcher: "mcp__argent__.*|Bash", async: false, timeout: Int(HookProtocol.hookTimeout)),
             Hook(event: "PostToolUse", matcher: "Bash", async: false, timeout: 10),
             Hook(event: "Stop", matcher: "", async: true, timeout: 3),
             Hook(event: "SessionEnd", matcher: "", async: true, timeout: 3),
         ]
-        if agent == .claude { hooks.insert(Hook(event: "PostToolUseFailure", matcher: "Bash", async: false, timeout: 10), at: 2) }
+        guard agent == .claude else { return hooks }
+        hooks.insert(Hook(event: "PostToolUseFailure", matcher: "Bash", async: false, timeout: 10), at: 2)
+        if sounds {
+            hooks += ["SessionStart", "UserPromptSubmit", "Notification", "PermissionRequest", "PreCompact"]
+                .map { Hook(event: $0, matcher: "", async: true, timeout: 3) }
+        }
         return hooks
     }
 
@@ -95,7 +129,7 @@ final class HookInstaller: ObservableObject {
     /// Whether the installed hooks are exactly the ones this copy of DevDeck wants.
     private func isCurrent(_ agent: AgentKind) -> Bool {
         let installed = installedHooks(in: Self.configURL(agent))
-        let wanted = Self.hooks(for: agent)
+        let wanted = Self.hooks(for: agent, sounds: sounds)
         return installed.count == wanted.count
             && Set(installed.map(\.hook)) == Set(wanted)
             && installed.allSatisfy { $0.command == Self.command(agent) }
@@ -125,10 +159,12 @@ final class HookInstaller: ObservableObject {
         return found
     }
 
-    /// argv: path, command, "1" to install / "0" to remove, events JSON.
+    /// argv: path, marker (handlers whose command contains it are removed), command, "1" to
+    /// install / "0" to remove, events JSON.
     private static let editScript = """
     import json, os, sys, tempfile
-    path, command, install, events = os.path.realpath(sys.argv[1]), sys.argv[2], sys.argv[3] == '1', json.loads(sys.argv[4])
+    path, marker, command = os.path.realpath(sys.argv[1]), sys.argv[2], sys.argv[3]
+    install, events = sys.argv[4] == '1', json.loads(sys.argv[5])
     try:
         with open(path) as f:
             cfg = json.load(f)
@@ -139,7 +175,7 @@ final class HookInstaller: ObservableObject {
         groups = []
         for group in hooks[event]:
             handlers = group.get('hooks', [])
-            kept = [h for h in handlers if 'devdeck-hook' not in h.get('command', '')]
+            kept = [h for h in handlers if marker not in h.get('command', '')]
             if kept or not handlers:
                 group['hooks'] = kept
                 groups.append(group)
