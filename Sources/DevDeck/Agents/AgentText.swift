@@ -34,7 +34,8 @@ struct AgentText {
         if book.resources.memoryLow { problems.append(memoryProblem ?? "memory is low") }
         for pool in waiter.pools where book.isFull(pool, now: now) {
             let used = book.used(pool, now: now)
-            problems.append("\(pool.count(used)) \(used == 1 ? "is" : "are") running (limit \(book.resources.limits[pool] ?? 0))")
+            let reason = book.resources.limitReasons[pool].map { ", " + $0 } ?? ""
+            problems.append("\(pool.count(used)) \(used == 1 ? "is" : "are") running (limit \(book.resources.limits[pool] ?? 0)\(reason))")
         }
         return problems.isEmpty ? "it was busy" : problems.joined(separator: " and ")
     }

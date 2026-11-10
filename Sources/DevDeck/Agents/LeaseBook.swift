@@ -79,6 +79,8 @@ struct LeaseBook {
     struct Resources: Equatable {
         var usage: [Pool: Int] = [:]
         var limits: [Pool: Int] = [:]
+        /// Why a limit is below the user's ceiling (`PoolRoom.Limit.reason`).
+        var limitReasons: [Pool: String] = [:]
         /// Free memory is below the user's threshold: start nothing heavy.
         var memoryLow = false
     }

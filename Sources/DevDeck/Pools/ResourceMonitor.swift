@@ -1,3 +1,4 @@
+import AppKit
 import Darwin
 import Foundation
 
@@ -43,14 +44,26 @@ final class ResourceMonitor: ObservableObject {
         var id: Int32 { pid }
     }
 
+    /// One of the user's own apps (not a developer tool) and the memory its processes take.
+    struct UserApp: Identifiable, Hashable, Sendable {
+        let name: String
+        /// The app's bundle; its processes are the ones running from inside it.
+        let path: String
+        var footprint: UInt64 = 0
+        var id: String { path }
+    }
+
     @Published private(set) var snapshot = Snapshot()
     @Published private(set) var builds: [BuildJob] = []
     /// Gradle and Kotlin daemons, while no Gradle build is running.
     @Published private(set) var idleDaemons: [Daemon] = []
+    /// The user's apps, largest first.
+    @Published private(set) var userApps: [UserApp] = []
     @Published private(set) var loaded = false
 
-    @Published var limits: [Pool: Int] {
-        didSet { UserDefaults.standard.set(Dictionary(uniqueKeysWithValues: limits.map { ($0.rawValue, $1) }), forKey: "poolLimits") }
+    /// The most of each kind of heavy work the user allows; `limits(usage:)` may allow less.
+    @Published var ceilings: [Pool: Int] {
+        didSet { UserDefaults.standard.set(Dictionary(uniqueKeysWithValues: ceilings.map { ($0.rawValue, $1) }), forKey: "poolLimits") }
     }
     /// Start no heavy work while free memory is below this percentage; 0 turns it off.
     @Published var minFreeMemory: Int {
@@ -83,7 +96,7 @@ final class ResourceMonitor: ObservableObject {
 
     init() {
         let stored = UserDefaults.standard.dictionary(forKey: "poolLimits") as? [String: Int] ?? [:]
-        limits = Dictionary(uniqueKeysWithValues: Pool.allCases.map { ($0, stored[$0.rawValue] ?? $0.defaultLimit) })
+        ceilings = Dictionary(uniqueKeysWithValues: Pool.allCases.map { ($0, stored[$0.rawValue] ?? $0.defaultLimit) })
         minFreeMemory = UserDefaults.standard.object(forKey: "minFreeMemory") as? Int ?? 15
         holdWhileSwapping = UserDefaults.standard.object(forKey: "holdWhileSwapping") as? Bool ?? true
         backgroundBuilds = UserDefaults.standard.bool(forKey: "backgroundBuilds")
@@ -98,6 +111,45 @@ final class ResourceMonitor: ObservableObject {
     }
 
     var memoryLow: Bool { memoryProblem != nil }
+
+    /// What each pool allows now, given what's running in it: the ceiling, or less to leave
+    /// room for the user's apps (see `PoolRoom`). Memory and the app in front are read now.
+    func limits(usage: [Pool: Int]) -> [Pool: PoolRoom.Limit] {
+        let available = Self.availableMemory()
+        let apps = userApps.reduce(0) { $0 + $1.footprint }
+        let game = gameInFront
+        return Dictionary(uniqueKeysWithValues: Pool.allCases.map { pool in
+            (pool, PoolRoom.limit(
+                pool, ceiling: ceilings[pool] ?? pool.defaultLimit, used: usage[pool] ?? 0, available: available,
+                appsFootprint: apps, game: game))
+        })
+    }
+
+    /// The name of the app in front when it's a game (its category is one of the games ones).
+    var gameInFront: String? {
+        guard let app = NSWorkspace.shared.frontmostApplication, let url = app.bundleURL else { return nil }
+        let category = gameCategories[url.path] ?? {
+            let found = Bundle(url: url)?.object(forInfoDictionaryKey: "LSApplicationCategoryType") as? String ?? ""
+            gameCategories[url.path] = found
+            return found
+        }()
+        return category.hasSuffix("games") ? app.localizedName : nil
+    }
+
+    private var gameCategories: [String: String] = [:]
+
+    /// Memory macOS can still hand out: kern.memorystatus_level percent of the Mac's memory.
+    nonisolated static func availableMemory() -> UInt64 {
+        var total: UInt64 = 0
+        var size = MemoryLayout<UInt64>.size
+        sysctlbyname("hw.memsize", &total, &size, nil, 0)
+        return total / 100 * UInt64(sysctlInt("kern.memorystatus_level") ?? 100)
+    }
+
+    /// Developer tools aren't the user's apps: their load is what the pools count.
+    private static let developerTools: Set<String> = [
+        "com.apple.dt.Xcode", "com.apple.iphonesimulator", "com.google.android.studio",
+    ]
 
     /// Why nothing heavy should start now: "memory is low (12% free)" or "the Mac is swapping
     /// hard (40 MB/s)". macOS reports "warning" pressure often while plenty is still free, so
@@ -122,8 +174,15 @@ final class ResourceMonitor: ObservableObject {
         guard !scanning else { return }
         scanning = true
         defer { scanning = false }
-        let scan = await Task.detached(priority: .utility) { Self.scan() }.value
+        let apps = NSWorkspace.shared.runningApplications.compactMap { app -> UserApp? in
+            guard app.activationPolicy == .regular, let url = app.bundleURL, let id = app.bundleIdentifier,
+                  !Self.developerTools.contains(id), id != Bundle.main.bundleIdentifier
+            else { return nil }
+            return UserApp(name: app.localizedName ?? url.deletingPathExtension().lastPathComponent, path: url.path)
+        }
+        let scan = await Task.detached(priority: .utility) { Self.scan(apps: apps) }.value
         snapshot = scan.snapshot
+        userApps = scan.userApps
         let now = Date.now
         if let traffic = scan.snapshot.swapTraffic { swapSamples.append((now, traffic)) }
         swapSamples.removeAll { now.timeIntervalSince($0.date) > Self.swapWindow }
@@ -181,16 +240,24 @@ final class ResourceMonitor: ObservableObject {
         var builds: [BuildJob]
         var idleDaemons: [Daemon]
         var table: [Int32: ServerScanner.ProcessRow]
+        var userApps: [UserApp]
     }
 
-    private nonisolated static func scan() -> Scan {
+    private nonisolated static func scan(apps: [UserApp]) -> Scan {
         let table = ServerScanner.recentProcessTable()
+        var userApps = apps
+        for row in table.values {
+            guard let index = userApps.firstIndex(where: { row.command.hasPrefix($0.path + "/") }) else { continue }
+            userApps[index].footprint += footprint(row.pid)
+        }
         let builds = buildJobs(in: table)
         let gradleBuilding = builds.contains { $0.kind == "Gradle build" }
         let daemons = gradleBuilding ? [] : table.values.compactMap { row -> Daemon? in
             return daemonKind(row.command).map { Daemon(pid: row.pid, kind: $0, footprint: footprint(row.pid)) }
         }.sorted { $0.footprint > $1.footprint }
-        return Scan(snapshot: snapshot(), builds: builds, idleDaemons: daemons, table: table)
+        return Scan(
+            snapshot: snapshot(), builds: builds, idleDaemons: daemons, table: table,
+            userApps: userApps.filter { $0.footprint > 0 }.sorted { $0.footprint > $1.footprint })
     }
 
     /// Native builds, counted once each: a build started by another build (expo run →

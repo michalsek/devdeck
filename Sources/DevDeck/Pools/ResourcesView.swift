@@ -30,6 +30,8 @@ struct ResourcesView: View {
                         .foregroundStyle(.orange)
                         .font(.callout)
                 }
+                LabeledContent("Your apps", value: monitor.userApps.isEmpty ? "–" : monitor.userApps.prefix(4)
+                    .map { "\($0.name) \(gigabytes($0.footprint))" }.joined(separator: " · "))
                 LabeledContent("CPU load", value: String(format: "%.1f on %d cores", monitor.snapshot.load, monitor.snapshot.cores))
                 LabeledContent("Temperature", value: monitor.snapshot.thermal.label)
             }
@@ -37,19 +39,22 @@ struct ResourcesView: View {
             Section {
                 ForEach(Pool.allCases) { pool in
                     LabeledContent {
-                        Stepper(value: limit(pool), in: 1...10) {
-                            Text("limit \(monitor.limits[pool] ?? pool.defaultLimit)").monospacedDigit()
+                        Stepper(value: ceiling(pool), in: 1...10) {
+                            Text("up to \(monitor.ceilings[pool] ?? pool.defaultLimit)").monospacedDigit()
                         }
                         .fixedSize()
                     } label: {
                         Text(pool.title)
                         Text(running(pool))
+                        if let reason = leases.book.resources.limitReasons[pool] {
+                            Text("Now \(leases.book.resources.limits[pool] ?? 0), \(reason)").foregroundStyle(.orange)
+                        }
                     }
                 }
             } header: {
                 Text("Limits")
             } footer: {
-                Text("An agent that boots a simulator or emulator, starts a native build or starts a dev server over its limit waits until there's room (up to \(Format.duration(HookProtocol.maxWait))). Your own work counts towards the limits, but is never held back.")
+                Text("An agent that boots a simulator or emulator, starts a native build or starts a dev server over its limit waits until there's room (up to \(Format.duration(HookProtocol.maxWait))). Below your limit, DevDeck allows only what fits in the available memory while keeping room for your apps to grow, and one simulator, emulator or build while a game is in front. Your own work counts towards the limits, but is never held back.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -118,8 +123,8 @@ struct ResourcesView: View {
         .formStyle(.grouped)
     }
 
-    private func limit(_ pool: Pool) -> Binding<Int> {
-        Binding(get: { monitor.limits[pool] ?? pool.defaultLimit }, set: { monitor.limits[pool] = $0 })
+    private func ceiling(_ pool: Pool) -> Binding<Int> {
+        Binding(get: { monitor.ceilings[pool] ?? pool.defaultLimit }, set: { monitor.ceilings[pool] = $0 })
     }
 
     /// "2 running: iPhone 17, Pixel 9"

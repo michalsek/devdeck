@@ -183,8 +183,8 @@ General → Agent Activity.
 
 ## Resources
 
-Heavy work an agent starts waits for room. Each kind has a limit, set on the
-**Resources** page:
+Heavy work an agent starts waits for room. Each kind has a limit; the one set on the
+**Resources** page is the most it allows:
 
 | Kind | Default | Recognized from |
 |---|---|---|
@@ -192,6 +192,18 @@ Heavy work an agent starts waits for room. Each kind has a limit, set on the
 | Android emulators | 1 running | `emulator -avd`, argent `boot-device` |
 | Native builds | 1 | `xcodebuild`, Gradle builds, `expo run`, `react-native run-*`, `npm run ios`/`android`, local EAS builds |
 | Dev servers | 3 | `expo start`, `npm`/`yarn`/`pnpm`/`bun` `start`/`dev`, Vite, Next.js, Storybook, Metro |
+
+Below that, the limit follows what you're doing, worked out when a call arrives:
+
+- **Memory.** Only as many more as fit in the memory macOS can still hand out, after
+  keeping 2 GB plus a quarter of what your own apps use (browsers, chat, games; their
+  helper processes count, developer tools and agents don't) for them to grow into. A
+  simulator counts as 2.5 GB, an emulator 3 GB, a build 4 GB, a dev server 0.75 GB.
+- **A game in front** (its App Store category is a games one): one simulator, one emulator
+  and one build at a time. Dev servers aren't limited by it.
+
+The Resources page shows your apps' memory and, under a lowered limit, why it's lower.
+What's already running is never stopped; only new work waits.
 
 While free memory is below 15% (or macOS reports critical memory pressure), or the Mac
 moves more than 16 MB a second in and out of swap for 30 seconds, nothing heavy starts.

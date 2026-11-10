@@ -35,6 +35,17 @@ enum Pool: String, CaseIterable, Identifiable, Hashable {
         }
     }
 
+    /// Memory one more of these typically takes: a booted simulator with an app, an
+    /// emulator with its guest RAM, a native build at its peak, a Metro or Vite server.
+    var typicalFootprint: UInt64 {
+        switch self {
+        case .iosSimulator: 2560 << 20
+        case .androidEmulator: 3 << 30
+        case .build: 4 << 30
+        case .devServer: 768 << 20
+        }
+    }
+
     // MARK: - Recognizing heavy work
 
     /// Pools an argent tool call needs: booting a device.

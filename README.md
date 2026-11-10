@@ -52,8 +52,10 @@ with your Mac's memory.
   with **Let Through** and **Turn Away** buttons. The menu bar icon counts waiting calls.
 - **On-device markers.** A small companion app shows who's driving a simulator in the
   Dynamic Island (a Live Activity), or as a silent notification on Android emulators.
-- **Resources.** Limits on booted simulators, emulators, native builds and dev servers,
-  plus a low-memory and swap check: agents wait for room instead of grinding your Mac to a halt.
+- **Resources.** Limits on booted simulators, emulators, native builds and dev servers that
+  shrink to leave memory for your own apps (browsers, chat, games) and while a game is in
+  front, plus a low-memory and swap check: agents wait for room instead of grinding your
+  Mac to a halt.
   It also stops idle Gradle and Kotlin daemons, and can run builds at background
   priority while you're at the Mac.
 - **Agent sounds.** A voice line when an agent starts, finishes, fails or needs you, and a

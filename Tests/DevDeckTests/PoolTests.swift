@@ -2,6 +2,26 @@ import XCTest
 @testable import DevDeck
 
 final class PoolTests: XCTestCase {
+    /// The ceiling holds while memory allows; less fits after the reserve for the user's
+    /// apps; a game in front leaves one simulator, emulator or build, not fewer dev servers.
+    func testLimitBelowCeiling() {
+        let gb: UInt64 = 1 << 30
+        let cases: [(Pool, ceiling: Int, used: Int, available: UInt64, apps: UInt64, game: String?, PoolRoom.Limit)] = [
+            (.iosSimulator, 2, 0, 12 * gb, 4 * gb, nil, .init(value: 2, reason: nil)),
+            // 12 GB free, 2 + 0.25 × 16 = 6 GB kept: room for 2 builds of 4 GB, ceiling 3.
+            (.build, 3, 0, 12 * gb, 16 * gb, nil, .init(value: 1, reason: "to leave memory for your apps")),
+            // What's running stays inside the limit; only more is held back.
+            (.iosSimulator, 4, 2, 3 * gb, 0, nil, .init(value: 2, reason: "to leave memory for your apps")),
+            (.iosSimulator, 2, 1, 12 * gb, 0, "Valheim", .init(value: 1, reason: "while Valheim is in front")),
+            (.devServer, 3, 0, 12 * gb, 0, "Valheim", .init(value: 3, reason: nil)),
+        ]
+        for (pool, ceiling, used, available, apps, game, expected) in cases {
+            XCTAssertEqual(
+                PoolRoom.limit(pool, ceiling: ceiling, used: used, available: available, appsFootprint: apps, game: game),
+                expected, "\(pool) ceiling \(ceiling)")
+        }
+    }
+
     func testRecognizesBuilds() {
         XCTAssertEqual(Pool.forShell("xcodebuild -workspace App.xcworkspace -scheme App build"), [.build])
         XCTAssertEqual(Pool.forShell("cd android && ./gradlew assembleDebug"), [.build])

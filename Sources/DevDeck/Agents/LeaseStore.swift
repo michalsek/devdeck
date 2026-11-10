@@ -225,14 +225,15 @@ final class LeaseStore: ObservableObject {
 
     /// What's running against the limits, for the book's room checks.
     private func updateResources() {
+        let usage: [Pool: Int] = [
+            .iosSimulator: devices.running.filter { $0.kind == .simulator }.count,
+            .androidEmulator: devices.running.filter { $0.kind == .emulator }.count,
+            .build: monitor.builds.count,
+            .devServer: servers.devServers.count,
+        ]
+        let limits = monitor.limits(usage: usage)
         book.resources = LeaseBook.Resources(
-            usage: [
-                .iosSimulator: devices.running.filter { $0.kind == .simulator }.count,
-                .androidEmulator: devices.running.filter { $0.kind == .emulator }.count,
-                .build: monitor.builds.count,
-                .devServer: servers.devServers.count,
-            ],
-            limits: monitor.limits,
+            usage: usage, limits: limits.mapValues(\.value), limitReasons: limits.compactMapValues(\.reason),
             memoryLow: monitor.memoryLow)
     }
 
