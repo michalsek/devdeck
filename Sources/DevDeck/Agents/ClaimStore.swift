@@ -4,7 +4,7 @@ import os
 
 /// agent-device's device claims (see `AgentDevice`): which session holds which device, how
 /// long it's been quiet, which agent drives it (from DevDeck's hooks), and Release, which
-/// closes the session through its daemon. Refreshed every 5 seconds.
+/// closes the session through its daemon. Refreshed on each `Pulse` tick.
 @MainActor
 final class ClaimStore: ObservableObject {
     private static let log = Logger(subsystem: "dev.devdeck.app", category: "claims")
@@ -18,7 +18,6 @@ final class ClaimStore: ObservableObject {
 
     var timing = ClaimState.Timing()
     private let directory: URL
-    private var timer: Timer?
     private var scanning = false
     /// T3 Code launcher → the device it's bound to.
     private var launcherDevices: [String: String?] = [:]
@@ -30,9 +29,6 @@ final class ClaimStore: ObservableObject {
             return
         }
         refresh()
-        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refresh() }
-        }
     }
 
     // MARK: Reading

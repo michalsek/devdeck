@@ -113,7 +113,7 @@ final class AgentStore: ObservableObject {
             return
         }
         notifier.onCleanUp = { [weak self] id in self?.cleanUp(id) }
-        // Each dev server scan (every 5 s) is a good moment to look at the process tree.
+        // Each dev server scan (each `Pulse` tick) is a good moment to look at the process tree.
         subscription = servers.$servers.sink { [weak self] _ in
             Task { @MainActor in self?.scan() }
         }

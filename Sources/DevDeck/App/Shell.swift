@@ -97,6 +97,23 @@ enum Shell {
             let candidate = URL(fileURLWithPath: String(dir)).appendingPathComponent(tool)
             if FileManager.default.isExecutableFile(atPath: candidate.path) { return candidate }
         }
-        return nil
+        return xcodeTools.contains(tool) ? xcodeTool(tool) : nil
+    }
+
+    /// Xcode's tools aren't on PATH. `xcrun --find` locates each once, so a call starts the
+    /// tool itself rather than xcrun and then the tool.
+    private static let xcodeTools: Set<String> = ["simctl", "devicectl"]
+    private static let xcodeLock = NSLock()
+    nonisolated(unsafe) private static var xcodePaths: [String: URL] = [:]
+
+    private static func xcodeTool(_ tool: String) -> URL? {
+        xcodeLock.lock()
+        defer { xcodeLock.unlock() }
+        if let url = xcodePaths[tool], FileManager.default.isExecutableFile(atPath: url.path) { return url }
+        let found = runSync("/usr/bin/xcrun", ["--find", tool])
+        guard found.ok, let line = found.output.split(whereSeparator: \.isNewline).first else { return nil }
+        let url = URL(fileURLWithPath: String(line))
+        xcodePaths[tool] = url
+        return url
     }
 }

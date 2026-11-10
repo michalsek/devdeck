@@ -34,15 +34,16 @@ final class Broker: ObservableObject {
     private let settings: AppSettings
     private let notifier: Notifier
     private let activity: ActivityLog
+    private let pulse: Pulse
     private var server: BrokerServer?
-    private var timer: Timer?
     /// "session|device|Metro pid" the agent has been warned about.
     private var metroWarned: Set<String> = []
     private var subscription: AnyCancellable?
 
     init(
         leases: LeaseStore, agents: AgentStore, claims: ClaimStore, keeper: MetroKeeper, devices: DeviceStore,
-        servers: ServerStore, monitor: ResourceMonitor, settings: AppSettings, notifier: Notifier, activity: ActivityLog
+        servers: ServerStore, monitor: ResourceMonitor, settings: AppSettings, notifier: Notifier, activity: ActivityLog,
+        pulse: Pulse
     ) {
         self.leases = leases
         self.agents = agents
@@ -54,6 +55,7 @@ final class Broker: ObservableObject {
         self.settings = settings
         self.notifier = notifier
         self.activity = activity
+        self.pulse = pulse
         guard !Demo.isOn else { return }
         // A call that boots a simulator or emulator, once it runs: the agent booted it.
         subscription = leases.ran.sink { [agents] waiter in
@@ -61,13 +63,11 @@ final class Broker: ObservableObject {
             agents.noteBooted(waiter.devices, by: waiter.session.id)
         }
         openSocket()
-        // Something replaced or removed the socket file: open a fresh one.
-        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                guard let self, self.server?.isStale ?? true else { return }
-                self.openSocket()
-            }
-        }
+    }
+
+    /// Something replaced or removed the socket file: open a fresh one.
+    func reopenSocketIfStale() {
+        if server?.isStale ?? true { openSocket() }
     }
 
     private func openSocket() {
@@ -80,6 +80,7 @@ final class Broker: ObservableObject {
     // MARK: Hook calls
 
     private func receive(_ data: Data, _ connection: BrokerConnection) {
+        pulse.noteActivity()
         if let script = try? JSONDecoder().decode(ScriptCommand.self, from: data) {
             return run(script, connection)
         }

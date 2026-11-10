@@ -76,7 +76,6 @@ final class ResourceMonitor: ObservableObject {
         }
     }
 
-    private var timer: Timer?
     private var scanning = false
     /// Processes put at background priority, to restore later.
     private var demoted: Set<Int32> = []
@@ -96,9 +95,6 @@ final class ResourceMonitor: ObservableObject {
             return
         }
         Task { await refresh() }
-        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-            Task { await self?.refresh() }
-        }
     }
 
     var memoryLow: Bool { memoryProblem != nil }
@@ -212,7 +208,7 @@ final class ResourceMonitor: ObservableObject {
             }
             return true
         }
-        let cwds = ServerScanner.workingDirectories(independent.map(\.0.pid))
+        let cwds = LibProc.workingDirectories(independent.map(\.0.pid))
         return independent.map { row, kind in
             BuildJob(
                 pid: row.pid, kind: kind,

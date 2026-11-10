@@ -77,8 +77,8 @@ enum ServerScanner {
     }
 
     static func scan() async -> [DevServer] {
-        let listening = listeningPorts()
         let table = recentProcessTable()
+        let listening = LibProc.listeningPorts(table.keys)
         let candidates = listening.keys.compactMap { pid -> ProcessRow? in
             guard let row = table[pid],
                   isRuntime(row.executable),
@@ -87,7 +87,7 @@ enum ServerScanner {
             return row
         }
         let candidatePIDs = Set(candidates.map(\.pid))
-        let cwds = workingDirectories(Array(candidatePIDs))
+        let cwds = LibProc.workingDirectories(Array(candidatePIDs))
 
         // A dev server often forks a listening child (Next, Vite plugins); show it as one row.
         var ports: [Int32: Set<Int>] = [:]
@@ -276,7 +276,7 @@ enum ServerScanner {
     /// A simulator app is a process on this Mac whose executable lives in its device's folder.
     static func simulatorClients(of ports: Set<Int>, table: [Int32: ProcessRow]) -> [Int: [String: String]] {
         var result: [Int: [String: String]] = [:]
-        for (pid, connected) in connections(to: ports) {
+        for (pid, connected) in LibProc.connections(table.keys, to: ports) {
             guard let command = table[pid]?.command, let (udid, app) = simulatorApp(command) else { continue }
             for port in connected { result[port, default: [:]][udid] = app }
         }
@@ -291,41 +291,7 @@ enum ServerScanner {
         return (String(match.1), String(match.2))
     }
 
-    /// pid → the given local ports it has an open TCP connection to.
-    static func connections(to ports: Set<Int>) -> [Int32: Set<Int>] {
-        let result = Shell.runSync("lsof", ["-nP", "-iTCP", "-sTCP:ESTABLISHED", "-Fpn"])
-        var connections: [Int32: Set<Int>] = [:]
-        var pid: Int32 = 0
-        for line in result.output.split(separator: "\n") {
-            if line.hasPrefix("p") {
-                pid = Int32(line.dropFirst()) ?? 0
-            } else if line.hasPrefix("n"), let arrow = line.range(of: "->") {
-                let remote = line[arrow.upperBound...]
-                let local = remote.hasPrefix("127.0.0.1:") || remote.hasPrefix("[::1]:") || remote.hasPrefix("localhost:")
-                if local, let port = remote.split(separator: ":").last.flatMap({ Int($0) }), ports.contains(port) {
-                    connections[pid, default: []].insert(port)
-                }
-            }
-        }
-        return connections
-    }
-
     // MARK: - Process data
-
-    /// pid → listening ports, from `lsof`.
-    static func listeningPorts() -> [Int32: Set<Int>] {
-        let result = Shell.runSync("lsof", ["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpn"])
-        var ports: [Int32: Set<Int>] = [:]
-        var pid: Int32 = 0
-        for line in result.output.split(separator: "\n") {
-            if line.hasPrefix("p") {
-                pid = Int32(line.dropFirst()) ?? 0
-            } else if line.hasPrefix("n"), let port = line.split(separator: ":").last.flatMap({ Int($0) }) {
-                ports[pid, default: []].insert(port)
-            }
-        }
-        return ports
-    }
 
     private static let cacheLock = NSLock()
     nonisolated(unsafe) private static var cached: (taken: Date, table: [Int32: ProcessRow])?
@@ -336,41 +302,9 @@ enum ServerScanner {
         cacheLock.lock()
         defer { cacheLock.unlock() }
         if let cached, Date.now.timeIntervalSince(cached.taken) < maxAge { return cached.table }
-        let table = processTable()
+        let table = LibProc.processTable()
         cached = (.now, table)
         return table
-    }
-
-    /// Every process with its parent, start time and full command line, read now.
-    static func processTable() -> [Int32: ProcessRow] {
-        let result = Shell.runSync("ps", ["-A", "-ww", "-o", "pid=,ppid=,lstart=,command="])
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "EEE MMM d HH:mm:ss yyyy"
-        var table: [Int32: ProcessRow] = [:]
-        for line in result.output.split(separator: "\n") {
-            // pid ppid Www Mmm d hh:mm:ss yyyy command...
-            let fields = line.split(separator: " ", maxSplits: 7, omittingEmptySubsequences: true)
-            guard fields.count == 8, let pid = Int32(fields[0]), let ppid = Int32(fields[1]) else { continue }
-            let started = formatter.date(from: fields[2...6].joined(separator: " "))
-            table[pid] = ProcessRow(
-                pid: pid, ppid: ppid, started: started,
-                command: fields[7].trimmingCharacters(in: .whitespaces))
-        }
-        return table
-    }
-
-    static func workingDirectories(_ pids: [Int32]) -> [Int32: String] {
-        guard !pids.isEmpty else { return [:] }
-        let list = pids.map(String.init).joined(separator: ",")
-        let result = Shell.runSync("lsof", ["-a", "-d", "cwd", "-Fn", "-p", list])
-        var cwds: [Int32: String] = [:]
-        var pid: Int32 = 0
-        for line in result.output.split(separator: "\n") {
-            if line.hasPrefix("p") { pid = Int32(line.dropFirst()) ?? 0 }
-            else if line.hasPrefix("n") { cwds[pid] = String(line.dropFirst()) }
-        }
-        return cwds
     }
 
     // MARK: - Stopping
@@ -418,7 +352,7 @@ enum ServerScanner {
 
     /// SIGTERM, then SIGKILL whatever is still alive after a few seconds.
     static func stop(_ pid: Int32) async -> Bool {
-        let targets = processesToStop(pid, table: processTable())
+        let targets = processesToStop(pid, table: LibProc.processTable())
         guard !targets.isEmpty else { return false }
         for target in targets { kill(target, SIGTERM) }
         for _ in 0..<30 {

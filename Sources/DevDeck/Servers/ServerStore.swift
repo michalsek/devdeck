@@ -9,7 +9,6 @@ final class ServerStore: ObservableObject {
     @Published private(set) var lastError: String?
     @Published private(set) var loaded = false
 
-    private var timer: Timer?
     private var refreshing = false
 
     init() {
@@ -19,9 +18,6 @@ final class ServerStore: ObservableObject {
             return
         }
         Task { await refresh() }
-        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-            Task { await self?.refresh() }
-        }
     }
 
     var devServers: [DevServer] { servers.filter { $0.group == .devServer } }

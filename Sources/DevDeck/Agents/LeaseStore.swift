@@ -22,7 +22,6 @@ final class LeaseStore: ObservableObject {
     private let claims: ClaimStore
     private let notifier: Notifier
     private let activity: ActivityLog
-    private var timer: Timer?
     private var subscription: AnyCancellable?
     /// Hook connections of waiting calls, and the calls themselves (for the reason when
     /// one is turned away; the book forgets them by then).
@@ -69,9 +68,6 @@ final class LeaseStore: ObservableObject {
                 else { continue }
                 book.rekey(serial, to: device.id)
             }
-        }
-        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.tick() }
         }
     }
 
@@ -240,7 +236,7 @@ final class LeaseStore: ObservableObject {
             memoryLow: monitor.memoryLow)
     }
 
-    private func tick() {
+    func tick() {
         guard devices.loaded else { return }
         updateResources()
         let minutes = settings.holdReleaseMinutes

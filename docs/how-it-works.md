@@ -2,10 +2,14 @@
 
 ## Finding devices and servers
 
-- **Devices:** `xcrun simctl`, `xcrun devicectl`, `adb` and `emulator` (the Android SDK at
-  `$ANDROID_HOME` or `~/Library/Android/sdk`). Refreshed every 5 seconds; physical iOS
-  devices every 15.
-- **Dev servers:** listening TCP ports from `lsof`, owned by a script runtime (node, bun,
+- **Refreshing.** Every scan runs on one shared tick: every 5 seconds while the menu or
+  dashboard is open, an agent made a call in the last 2 minutes or a call is waiting, and
+  every 30 seconds otherwise. Opening the menu or dashboard refreshes at once. Processes,
+  ports and working directories are read from the kernel, not with `ps` or `lsof`.
+- **Devices:** `simctl`, `devicectl` and `adb`; AVDs are the `.ini` files in `~/.android/avd`
+  (the Android SDK at `$ANDROID_HOME` or `~/Library/Android/sdk`). Physical iOS devices
+  refresh every 30 seconds at most.
+- **Dev servers:** listening TCP ports, owned by a script runtime (node, bun,
   deno, python, ruby, php), excluding runtimes bundled inside apps (editor helpers,
   Electron backends). The project name is the git repo the server runs in, and worktrees
   are named too. Metro is recognized by its `/status` endpoint, and `/json/list` gives

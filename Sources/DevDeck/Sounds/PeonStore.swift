@@ -32,15 +32,11 @@ final class PeonStore: ObservableObject {
     private var stateURL: URL { peonDir.appendingPathComponent(".state.json") }
     private var pausedURL: URL { peonDir.appendingPathComponent(".paused") }
     private var scriptURL: URL { peonDir.appendingPathComponent("peon.sh") }
-    private var timer: Timer?
     private var previewProcess: Process?
 
     init() {
         peonDir = Self.resolvePeonDir()
         reload()
-        timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.reload() }
-        }
     }
 
     /// Mirrors peon.sh's data-dir resolution for Homebrew/script installs.

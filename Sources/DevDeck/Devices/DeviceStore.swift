@@ -83,7 +83,7 @@ struct DeviceItem: Identifiable, Hashable {
 }
 
 /// Lists simulators, emulators and physical devices with the platform tools
-/// (`simctl`, `devicectl`, `adb`, `emulator`), polling every few seconds.
+/// (`simctl`, `devicectl`, `adb`, `emulator`), on each `Pulse` tick.
 @MainActor
 final class DeviceStore: ObservableObject {
     @Published private(set) var devices: [DeviceItem] = []
@@ -91,11 +91,12 @@ final class DeviceStore: ObservableObject {
     @Published private(set) var lastError: String?
     @Published private(set) var loaded = false
 
-    private var timer: Timer?
     private var refreshing = false
-    private var tick = 0
-    /// devicectl is slow (about a second), so physical devices refresh less often.
+    /// devicectl is slow (about a second), so physical devices refresh every
+    /// `physicalInterval` at most, unless forced.
     private var physical: [DeviceItem] = []
+    private var physicalScanned = Date.distantPast
+    private static let physicalInterval: TimeInterval = 30
     /// Emulator serial → AVD name, so an emulator keeps its id when `adb emu avd name`
     /// is slow to answer (e.g. while adb is installing an app).
     private var knownAVDs: [String: String] = [:]
@@ -107,9 +108,6 @@ final class DeviceStore: ObservableObject {
             return
         }
         Task { await refresh() }
-        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-            Task { await self?.refresh() }
-        }
     }
 
     var running: [DeviceItem] { devices.filter(\.isRunning) }
@@ -122,8 +120,8 @@ final class DeviceStore: ObservableObject {
         guard !refreshing else { return }
         refreshing = true
         defer { refreshing = false }
-        let includePhysical = force || tick % 3 == 0
-        tick += 1
+        let includePhysical = force || Date.now.timeIntervalSince(physicalScanned) >= Self.physicalInterval
+        if includePhysical { physicalScanned = .now }
 
         async let simulators = Self.scanSimulators()
         async let android = Self.scanAndroid(knownAVDs: knownAVDs)
@@ -145,7 +143,7 @@ final class DeviceStore: ObservableObject {
         perform(device) {
             switch device.kind {
             case .simulator:
-                let result = await Shell.run("xcrun", ["simctl", "boot", device.id])
+                let result = await Shell.run("simctl", ["boot", device.id])
                 // Booting doesn't open a window; Simulator.app shows booted devices.
                 _ = await Shell.run("/usr/bin/open", ["-a", "Simulator"])
                 return result
@@ -164,7 +162,7 @@ final class DeviceStore: ObservableObject {
         perform(device) { () -> Shell.Result? in
             switch device.kind {
             case .simulator:
-                return await Shell.run("xcrun", ["simctl", "shutdown", device.id])
+                return await Shell.run("simctl", ["shutdown", device.id])
             case .emulator:
                 guard let serial = device.serial else { return nil }
                 return await Shell.run("adb", ["-s", serial, "emu", "kill"])
@@ -200,7 +198,7 @@ final class DeviceStore: ObservableObject {
     // MARK: - Scanning
 
     nonisolated static func scanSimulators() async -> [DeviceItem] {
-        let result = await Shell.run("xcrun", ["simctl", "list", "devices", "-j"])
+        let result = await Shell.run("simctl", ["list", "devices", "-j"])
         guard result.ok,
               let json = try? JSONSerialization.jsonObject(with: Data(result.output.utf8)) as? [String: Any],
               let runtimes = json["devices"] as? [String: [[String: Any]]]
@@ -232,7 +230,7 @@ final class DeviceStore: ObservableObject {
         let file = FileManager.default.temporaryDirectory
             .appendingPathComponent("devdeck-devicectl-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: file) }
-        let result = await Shell.run("xcrun", ["devicectl", "list", "devices", "--json-output", file.path, "-q"])
+        let result = await Shell.run("devicectl", ["list", "devices", "--json-output", file.path, "-q"])
         guard result.ok,
               let data = try? Data(contentsOf: file),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -288,7 +286,7 @@ final class DeviceStore: ObservableObject {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("devdeck-lock-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: file) }
         let result = await Shell.run(
-            "xcrun", ["devicectl", "device", "info", "lockState", "--device", id, "--json-output", file.path, "-q"], timeout: 10)
+            "devicectl", ["device", "info", "lockState", "--device", id, "--json-output", file.path, "-q"], timeout: 10)
         guard result.ok, let data = try? Data(contentsOf: file),
               let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         else { return false }
@@ -296,8 +294,9 @@ final class DeviceStore: ObservableObject {
     }
 
     nonisolated static func scanAndroid(knownAVDs: [String: String] = [:]) async -> [DeviceItem] {
-        async let avdsResult = Shell.run("emulator", ["-list-avds"])
         let adb = await Shell.run("adb", ["devices", "-l"])
+        let table = ServerScanner.recentProcessTable()
+        let listening = LibProc.listeningPorts(table.keys)
         var items: [DeviceItem] = []
         var runningAVDs: Set<String> = []
 
@@ -315,13 +314,20 @@ final class DeviceStore: ObservableObject {
                 let reverses = state == "device" ? await reversePorts(serial) : []
 
                 if serial.hasPrefix("emulator-") {
-                    // The console answers "Medium_Phone\r\nOK\r\n"; empty or slow means unknown.
-                    let reply = await Shell.run("adb", ["-s", serial, "emu", "avd", "name"], timeout: 5)
-                    let avd = reply.ok
-                        ? reply.output.split(whereSeparator: \.isNewline).first
-                            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                            .flatMap { $0.isEmpty ? nil : $0 } ?? knownAVDs[serial]
-                        : knownAVDs[serial]
+                    // The emulator listening on the console port (emulator-5554 → 5554) names
+                    // its AVD on its command line. Otherwise ask the console, which answers
+                    // "Medium_Phone\r\nOK\r\n"; empty or slow means unknown.
+                    let console = Int(serial.dropFirst("emulator-".count))
+                    let owner = console.flatMap { port in listening.first { $0.value.contains(port) }?.key }
+                    var avd = owner.flatMap { table[$0] }.flatMap { avdName(command: $0.command) }
+                    if avd == nil {
+                        let reply = await Shell.run("adb", ["-s", serial, "emu", "avd", "name"], timeout: 5)
+                        avd = reply.ok
+                            ? reply.output.split(whereSeparator: \.isNewline).first
+                                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                                .flatMap { $0.isEmpty ? nil : $0 } ?? knownAVDs[serial]
+                            : knownAVDs[serial]
+                    }
                     if let avd { runningAVDs.insert(avd) }
                     var item = DeviceItem(
                         id: avd.map(DeviceItem.avdID) ?? serial,
@@ -354,18 +360,32 @@ final class DeviceStore: ObservableObject {
             }
         }
 
-        let avds = await avdsResult
-        if avds.ok {
-            for name in avds.output.split(separator: "\n").map({ $0.trimmingCharacters(in: .whitespaces) })
-            where !name.isEmpty && !name.contains(" ") && !runningAVDs.contains(name) {
-                var item = DeviceItem(
-                    id: DeviceItem.avdID(name), name: name.replacingOccurrences(of: "_", with: " "),
-                    detail: "Android emulator", kind: .emulator, platform: .android, isRunning: false)
-                item.avdName = name
-                items.append(item)
-            }
+        for name in availableAVDs() where !runningAVDs.contains(name) {
+            var item = DeviceItem(
+                id: DeviceItem.avdID(name), name: name.replacingOccurrences(of: "_", with: " "),
+                detail: "Android emulator", kind: .emulator, platform: .android, isRunning: false)
+            item.avdName = name
+            items.append(item)
         }
         return items
+    }
+
+    /// What `emulator -list-avds` prints: the `<name>.ini` files in the AVD folder.
+    nonisolated static func availableAVDs() -> [String] {
+        let env = ProcessInfo.processInfo.environment
+        let folder = env["ANDROID_AVD_HOME"].map { URL(fileURLWithPath: $0) }
+            ?? URL(fileURLWithPath: env["ANDROID_USER_HOME"] ?? env["ANDROID_EMULATOR_HOME"]
+                ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".android").path)
+                .appendingPathComponent("avd")
+        let files = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+        return files.filter { $0.hasSuffix(".ini") }.map { String($0.dropLast(4)) }.sorted()
+    }
+
+    /// The AVD on an emulator's command line: `-avd Medium_Phone` or `@Medium_Phone`.
+    nonisolated static func avdName(command: String) -> String? {
+        let args = command.split(separator: " ")
+        if let index = args.firstIndex(of: "-avd"), index + 1 < args.count { return String(args[index + 1]) }
+        return args.first { $0.hasPrefix("@") && $0.count > 1 }.map { String($0.dropFirst()) }
     }
 
     /// Whether an Android phone shows its lock screen.

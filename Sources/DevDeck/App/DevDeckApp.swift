@@ -32,7 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusMenu: StatusMenu?
     private var pageItems: [DashboardPage: NSMenuItem] = [:]
     private var subscriptions = Set<AnyCancellable>()
-    private lazy var dashboard = DashboardWindow { [unowned self] in
+    private lazy var dashboard = DashboardWindow(pulse: stores.pulse) { [unowned self] in
         AnyView(DashboardView().environment(stores))
     }
 
@@ -149,10 +149,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// regular app (Dock icon, menu bar, ⌘-Tab); closing it goes back to menu bar only.
 @MainActor
 final class DashboardWindow: NSObject, NSWindowDelegate {
+    private let pulse: Pulse
     private let content: () -> AnyView
     private var window: NSWindow?
 
-    init(content: @escaping () -> AnyView) {
+    init(pulse: Pulse, content: @escaping () -> AnyView) {
+        self.pulse = pulse
         self.content = content
     }
 
@@ -170,6 +172,12 @@ final class DashboardWindow: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        pulse.setViewing("dashboard", false)
+    }
+
+    /// On screen (not minimized, hidden or covered): the pages show live data.
+    func windowDidChangeOcclusionState(_ notification: Notification) {
+        pulse.setViewing("dashboard", window?.occlusionState.contains(.visible) ?? false)
     }
 
     private func makeWindow() -> NSWindow {
@@ -193,6 +201,7 @@ final class DashboardWindow: NSObject, NSWindowDelegate {
 /// Every store the app runs, made once at launch.
 @MainActor
 struct Stores {
+    let pulse = Pulse()
     let peon = PeonStore()
     let devices = DeviceStore()
     let servers = ServerStore()
@@ -219,9 +228,20 @@ struct Stores {
         keeper = MetroKeeper(servers: servers, activity: activity)
         broker = Broker(
             leases: leases, agents: agents, claims: claims, keeper: keeper, devices: devices, servers: servers,
-            monitor: monitor, settings: settings, notifier: notifier, activity: activity)
+            monitor: monitor, settings: settings, notifier: notifier, activity: activity, pulse: pulse)
         metroWatcher = MetroWatcher(
             devices: devices, servers: servers, leases: leases, notifier: notifier, activity: activity)
+        guard !Demo.isOn else { return }
+        pulse.hasWork = { [leases] in !leases.book.waiters.isEmpty }
+        pulse.start([
+            { [devices] in Task { await devices.refresh() } },
+            { [servers] in Task { await servers.refresh() } },
+            { [monitor] in Task { await monitor.refresh() } },
+            claims.refresh,
+            leases.tick,
+            broker.reopenSocketIfStale,
+            peon.reload,
+        ])
     }
 }
 

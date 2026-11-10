@@ -148,7 +148,7 @@ final class MarkerController {
         if container == nil {
             // Nothing to show yet: install only once there is.
             if state == .free && !start { return true }
-            guard await Shell.run("xcrun", ["simctl", "install", udid, app.path], timeout: 60).ok else { return false }
+            guard await Shell.run("simctl", ["install", udid, app.path], timeout: 60).ok else { return false }
             container = await dataContainer(udid)
         }
         guard let container else { return false }
@@ -161,8 +161,8 @@ final class MarkerController {
         if start {
             // Live Activities can only be started from the front; the companion sends
             // itself back to the home screen straight away.
-            return await Shell.run("xcrun", [
-                "simctl", "launch", "--terminate-running-process", udid, bundleID, "--devdeck-start",
+            return await Shell.run("simctl", [
+                "launch", "--terminate-running-process", udid, bundleID, "--devdeck-start",
             ], timeout: 30).ok
         }
         // Wakes the companion in the background so it re-reads state.json. simctl exits
@@ -170,12 +170,12 @@ final class MarkerController {
         let payload = FileManager.default.temporaryDirectory.appendingPathComponent("devdeck-push-\(udid).json")
         try? Data(#"{"aps":{"content-available":1}}"#.utf8).write(to: payload)
         defer { try? FileManager.default.removeItem(at: payload) }
-        _ = await Shell.run("xcrun", ["simctl", "push", udid, bundleID, payload.path], timeout: 15)
+        _ = await Shell.run("simctl", ["push", udid, bundleID, payload.path], timeout: 15)
         return true
     }
 
     private nonisolated static func dataContainer(_ udid: String) async -> URL? {
-        let result = await Shell.run("xcrun", ["simctl", "get_app_container", udid, bundleID, "data"], timeout: 15)
+        let result = await Shell.run("simctl", ["get_app_container", udid, bundleID, "data"], timeout: 15)
         let path = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
         return result.ok && !path.isEmpty ? URL(fileURLWithPath: path) : nil
     }
