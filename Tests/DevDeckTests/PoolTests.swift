@@ -30,6 +30,7 @@ final class PoolTests: XCTestCase {
         XCTAssertEqual(Pool.forShell("yarn ios"), [.build])
         XCTAssertEqual(Pool.forShell("eas build -p ios --local"), [.build])
         XCTAssertEqual(Pool.forShell("xcodebuild -list"), [])
+        XCTAssertEqual(Pool.forShell("xcodebuild test-without-building -xctestrun Runner.xctestrun"), [])
         XCTAssertEqual(Pool.forShell("./gradlew --stop"), [])
         XCTAssertEqual(Pool.forShell("./gradlew tasks"), [])
     }

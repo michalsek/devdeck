@@ -73,7 +73,10 @@ enum Pool: String, CaseIterable, Identifiable, Hashable {
     private static func pool(program: String, args: [String]) -> Pool? {
         switch program {
         case "xcodebuild":
-            let info = ["-list", "-version", "-showsdks", "-showBuildSettings", "-showdestinations", "-help", "-usage"]
+            let info = [
+                "-list", "-version", "-showsdks", "-showBuildSettings", "-showdestinations", "-help", "-usage",
+                "test-without-building",
+            ]
             return args.contains(where: info.contains) ? nil : .build
         case "gradlew", "gradle":
             if args.contains(where: { ["--stop", "--status", "--version", "tasks"].contains($0) }) { return nil }

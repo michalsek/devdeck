@@ -38,9 +38,15 @@ final class MetroLinkTests: XCTestCase {
         XCTAssertNil([servers[0]].metro(for: android("Pixel", model: "sdk_gphone64_arm64", reverse: [])))
 
         let link = MetroLink(server: metro(3, port: 8081, project: "app", worktree: "fix"), app: nil)
-        XCTAssertTrue(link.isWrong(for: .init(name: "other", subtitle: "")))
-        XCTAssertTrue(link.isWrong(for: .init(name: "app", subtitle: "")))
-        XCTAssertFalse(link.isWrong(for: .init(name: "app", subtitle: "apps/mobile", worktree: "fix")))
+        func session(_ project: DevServer.Project) -> AgentSession {
+            AgentSession(agent: .claude, sessionID: "s", host: nil, project: project)
+        }
+        let main = session(.init(name: "app", subtitle: ""))
+        XCTAssertTrue(link.isWrong(for: session(.init(name: "other", subtitle: "")), owners: [:]))
+        XCTAssertTrue(link.isWrong(for: main, owners: [:]))
+        XCTAssertFalse(link.isWrong(for: session(.init(name: "app", subtitle: "apps/mobile", worktree: "fix")), owners: [:]))
+        // The session started it: a subagent's Metro in its worktree.
+        XCTAssertFalse(link.isWrong(for: main, owners: [3: main]))
     }
 
     func testSimulatorAppFromItsProcess() {

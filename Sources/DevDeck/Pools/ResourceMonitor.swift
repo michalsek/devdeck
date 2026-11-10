@@ -286,7 +286,8 @@ final class ResourceMonitor: ObservableObject {
 
     nonisolated static func buildKind(_ row: ServerScanner.ProcessRow) -> String? {
         let command = row.command
-        if row.executable == "xcodebuild" { return "Xcode build" }
+        // `test-without-building` runs UI-test runners (argent's, agent-device's) that stay up for hours.
+        if row.executable == "xcodebuild" { return row.command.contains(" test-without-building") ? nil : "Xcode build" }
         if command.contains("org.gradle.wrapper.GradleWrapperMain") || command.contains("org.gradle.launcher.GradleMain") {
             return "Gradle build"
         }

@@ -168,6 +168,8 @@ struct HookEvent: Equatable {
     /// a few with `device_id`; `boot-device` can take an AVD name instead.
     static func argentCall(_ tool: String, _ input: [String: Any])
         -> (action: String, targets: [DeviceTarget], releases: [DeviceTarget]) {
+        // It compares two image files on disk; nothing runs on the device it names.
+        if tool == "screenshot-diff" { return (tool, [], []) }
         var ids = ["udid", "device_id", "deviceId", "serial"].compactMap { input[$0] as? String }
         if let avd = input["avdName"] as? String { ids.append(DeviceItem.avdID(avd)) }
         if tool == "stop-simulator-server" || tool == "stop-all-simulator-servers" {

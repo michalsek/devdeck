@@ -31,6 +31,14 @@ final class LeaseStore: ObservableObject {
     private var notified: Set<UUID> = []
     /// Why each waiting call started waiting, for the log once it's over.
     private var waitReasons: [UUID: String] = [:]
+    /// agent-device sessions released because their agent's session ended.
+    private var releasedEnded: Set<String> = []
+    /// Why each pool's limit is low, as last logged (nil: the user's setting), and a
+    /// different reason with when it started, logged once it has lasted `limitSettles`.
+    private var loggedLimits: [Pool: String] = [:]
+    private var limitChanges: [Pool: (reason: String?, since: Date)] = [:]
+    /// Memory moves the limit up and down by the minute; only a change that lasts is news.
+    private static let limitSettles: TimeInterval = 60
 
     init(
         devices: DeviceStore, settings: AppSettings, servers: ServerStore, monitor: ResourceMonitor,
@@ -117,11 +125,24 @@ final class LeaseStore: ObservableObject {
 
     /// Closes the agent-device session that holds a claim, which frees the device.
     func releaseClaim(_ status: ClaimStatus) {
+        releaseClaim(status, "You released agent-device session \(status.claim.session) (\(status.claim.project)).")
+    }
+
+    private func releaseClaim(_ status: ClaimStatus, _ detail: String) {
         notifier.clearClaim(session: status.claim.session)
-        activity.add(
-            .claimReleased, agent: claims.owner(of: status)?.session.label, subject: status.claim.deviceName,
-            "You released agent-device session \(status.claim.session) (\(status.claim.project)).")
+        activity.add(.claimReleased, agent: claims.owner(of: status)?.session.label, subject: status.claim.deviceName, detail)
         claims.release(status)
+    }
+
+    /// Claims whose agent session has ended: nobody is left to close them, and the device
+    /// stays blocked for every other thread. Tried once per session.
+    private func releaseEndedClaims() {
+        for status in claims.claims where claims.owner(of: status)?.ended != nil {
+            guard releasedEnded.insert(status.claim.session).inserted else { continue }
+            releaseClaim(
+                status, "Released agent-device session \(status.claim.session) (\(status.claim.project)): "
+                    + "the agent's session ended without closing it.")
+        }
     }
 
     /// Lets a waiting agent call go next.
@@ -235,6 +256,30 @@ final class LeaseStore: ObservableObject {
         book.resources = LeaseBook.Resources(
             usage: usage, limits: limits.mapValues(\.value), limitReasons: limits.compactMapValues(\.reason),
             memoryLow: monitor.memoryLow)
+        logLimitChanges(now: .now)
+    }
+
+    /// A limit that went below the user's setting, or back, and stayed there: so a limit
+    /// that stays low can be traced later.
+    private func logLimitChanges(now: Date) {
+        for pool in Pool.allCases {
+            let reason = book.resources.limitReasons[pool]
+            guard reason != loggedLimits[pool] else {
+                limitChanges[pool] = nil
+                continue
+            }
+            guard let change = limitChanges[pool], change.reason == reason else {
+                limitChanges[pool] = (reason, now)
+                continue
+            }
+            guard now.timeIntervalSince(change.since) >= Self.limitSettles else { continue }
+            loggedLimits[pool] = reason
+            limitChanges[pool] = nil
+            let limit = book.resources.limits[pool] ?? 0
+            activity.add(
+                .limit, subject: pool.title,
+                reason.map { "Lowered to \(limit), \($0)." } ?? "Back to \(limit), your setting.")
+        }
     }
 
     func tick() {
@@ -255,6 +300,7 @@ final class LeaseStore: ObservableObject {
                 page: .agents)
         }
         notifyWaiting()
+        releaseEndedClaims()
     }
 
     /// Tells the user about calls that have waited a few seconds (quick hand-offs aren't news).

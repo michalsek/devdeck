@@ -29,6 +29,8 @@ final class HookEventTests: XCTestCase {
 
         // No device: nothing to show.
         XCTAssertNil(event("mcp__argent__list-devices", [:]))
+        // It compares two files; the device it names isn't touched.
+        XCTAssertNil(event("mcp__argent__screenshot-diff", ["udid": udid, "baselinePath": "/a.png", "currentPath": "/b.png"]))
     }
 
     func testSimctlCommands() {

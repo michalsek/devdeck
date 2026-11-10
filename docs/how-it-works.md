@@ -98,9 +98,10 @@ does. A thread that finishes without closing its device keeps it until someone d
 - **Release Claim** closes the session through its daemon (the same `close` T3 Code
   sends, on the daemon's HTTP port with the token from its `daemon.json`), which frees
   the device. The agent that had it has to open the device again. The dashboard asks for
-  a second click; the menu offers it only for stale claims. DevDeck never releases a claim
-  on its own, and never deletes claim files: the daemon also remembers its sessions, so
-  deleting the file wouldn't free the device.
+  a second click; the menu offers it only for stale claims. DevDeck releases a claim on its
+  own only when the agent that opened it has ended its session (nobody is left to close
+  it), and never deletes claim files: the daemon also remembers its sessions, so deleting
+  the file wouldn't free the device.
 - **Turned away.** When agent-device turns an agent's command away with `DEVICE_IN_USE`,
   DevDeck adds to what the agent reads: who holds the device and how long it's been
   quiet. For a claim in use, it says to leave it alone. For a stale one, it says waiting
@@ -117,7 +118,9 @@ call until an hour after it ends.
   and ended when it sends `SessionEnd` or its process is gone.
 - **What it started.** Every few seconds DevDeck walks the agent's process tree for dev
   servers, native builds and Android emulators. They stay the session's after their
-  parent shell exits. Simulators and emulators it boots count too, once the boot runs.
+  parent shell exits. One whose shell exited before DevDeck saw it (`nohup … &`) is
+  found by the session it was started in, which Claude Code puts in its environment
+  (`CLAUDE_CODE_SESSION_ID`, `CLAUDE_PID`); subagents count as their parent. Simulators and emulators it boots count too, once the boot runs.
   Gradle and Kotlin daemons serve every build, so they're nobody's leftovers: stop idle
   ones on the Resources page. A new session in the same agent process (after `/clear`)
   carries on with what the previous one started.
@@ -132,8 +135,9 @@ call until an hour after it ends.
   Node, Java, `xcodebuild` or adb; `simctl shutdown all` / `erase all`; `adb kill-server`;
   restarting CoreSimulator; argent's `stop-all-simulator-servers` without a device list.
 - **Stopping someone else's server.** `kill <pid>`, `kill $(lsof -ti:<port>)`,
-  `kill-port` and `fuser -k` aimed at a dev server or build another session (or you)
-  started wait for your OK too.
+  `kill-port` and `fuser -k` aimed at a dev server or build another session started wait
+  for your OK too. One DevDeck can't tie to any agent (most likely yours) waits a minute,
+  then the agent is turned away.
 - **Android on a phone.** With General → Android testing set to only physical phones,
   an agent that starts or drives an emulator is turned away and told to use the
   connected phone, or you're asked to connect one.
@@ -142,7 +146,8 @@ call until an hour after it ends.
   told. A locked phone only holds calls that need it awake: installs and builds go ahead.
 - **The wrong Metro.** The first time an agent acts on a device whose app loads another
   checkout's Metro, the call is turned away with how to point the app at the right one;
-  asking again goes through. You're told too.
+  asking again goes through. You're told too. A Metro the session started is its own,
+  wherever it runs (a subagent's runs in its worktree).
 
 ## Metro
 
@@ -153,12 +158,12 @@ folder, with the agent's `PATH`, in its own session (so quitting DevDeck doesn't
 and logs to `~/Library/Logs/DevDeck` in place of the command's own redirections. A
 command that sets something up first (`export …`, `nvm use`, `source .env`) runs as the
 agent wrote it, and so does one whose Metro exits right away. The agent is told the port and the log,
-and doesn't start it again. Metro keeps running when the agent's shell or background
-task ends, until you stop it, restart it from its menu, or clean up after the agent.
+and doesn't start it again, and how to stop it once it's done. Metro keeps running when
+the agent's shell or background task ends, until the agent or you stop it, you restart it
+from its menu, or you clean up after the agent.
 If the port belongs to another project's server, DevDeck picks the next free one and
 tells the agent how to point the app at it. If Metro is already running in that folder,
-the agent is pointed at it instead. An agent may stop the Metro DevDeck runs for it. Metro isn't started while dev servers are
-over their limit or the Mac is short on memory; the call waits like any other.
+the agent is pointed at it instead. Metro isn't started while dev servers are over their limit or the Mac is short on memory; the call waits like any other.
 
 Under each running device, DevDeck shows which Metro its app loads: for a simulator from
 the app's connection to Metro, for an emulator from its `adb reverse` rules, otherwise
@@ -168,8 +173,8 @@ from the name the app gives Metro.
 
 The **Activity** page lists what DevDeck decided: calls that waited (and why), turned
 away, sent to another device or held for your OK, what you did, released claims,
-cleanups and Metro events. It's kept for a week in
-`~/Library/Application Support/DevDeck/activity.jsonl`.
+cleanups, Metro events, and limits that went below your setting (or back) for a minute
+or more. It's kept for a week in `~/Library/Application Support/DevDeck/activity.jsonl`.
 
 ## Notifications
 
@@ -190,7 +195,7 @@ Heavy work an agent starts waits for room. Each kind has a limit; the one set on
 |---|---|---|
 | iOS simulators | 2 booted | `simctl boot`, argent `boot-device` |
 | Android emulators | 1 running | `emulator -avd`, argent `boot-device` |
-| Native builds | 1 | `xcodebuild`, Gradle builds, `expo run`, `react-native run-*`, `npm run ios`/`android`, local EAS builds |
+| Native builds | 1 | `xcodebuild` (not `test-without-building`: argent's and agent-device's UI-test runners stay up for hours), Gradle builds, `expo run`, `react-native run-*`, `npm run ios`/`android`, local EAS builds |
 | Dev servers | 3 | `expo start`, `npm`/`yarn`/`pnpm`/`bun` `start`/`dev`, Vite, Next.js, Storybook, Metro |
 
 Below that, the limit follows what you're doing, worked out when a call arrives:

@@ -17,7 +17,7 @@ struct ActivityView: View {
         func includes(_ kind: ActivityEntry.Kind) -> Bool {
             switch self {
             case .all: true
-            case .agents: [.ranAfterWait, .turnedAway, .redirected, .guarded, .needsUser].contains(kind)
+            case .agents: [.ranAfterWait, .turnedAway, .redirected, .guarded, .needsUser, .limit].contains(kind)
             case .user: [.user, .letThrough, .claimReleased, .cleanedUp].contains(kind)
             case .metro: kind == .metro
             }
@@ -117,6 +117,7 @@ extension ActivityEntry.Kind {
         case .claimReleased: "Claim released"
         case .cleanedUp: "Cleaned up"
         case .metro: "Metro"
+        case .limit: "Limit changed"
         }
     }
 
@@ -132,6 +133,7 @@ extension ActivityEntry.Kind {
         case .claimReleased: "lock.open.fill"
         case .cleanedUp: "sparkles"
         case .metro: "server.rack"
+        case .limit: "gauge.with.dots.needle.33percent"
         }
     }
 
@@ -143,6 +145,7 @@ extension ActivityEntry.Kind {
         case .user, .letThrough: .blue
         case .claimReleased, .cleanedUp: .green
         case .metro: .purple
+        case .limit: .orange
         }
     }
 }

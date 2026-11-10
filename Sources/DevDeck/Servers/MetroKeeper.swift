@@ -25,8 +25,8 @@ struct KeptMetro: Codable, Identifiable, Hashable {
 /// Runs the Metro servers agents start, as DevDeck's own processes. An agent's shell or
 /// background task gets killed when its harness's time limit runs out, and Metro with it;
 /// DevDeck's copy keeps running (in its own session, so not even quitting DevDeck stops
-/// it) until the user stops it or cleans up after the agent. The agent is told the port
-/// and where the log is.
+/// it) until the agent or the user stops it, or the user cleans up after the agent. The
+/// agent is told the port, where the log is and how to stop it.
 @MainActor
 final class MetroKeeper: ObservableObject {
     private static let log = Logger(subsystem: "dev.devdeck.app", category: "metro")
@@ -44,6 +44,8 @@ final class MetroKeeper: ObservableObject {
     private var exits: [Int32: DispatchSourceProcess] = [:]
 
     static let logs = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/DevDeck")
+    /// Names the agent session a kept Metro runs for in its environment (see `AgentStore.starter`).
+    nonisolated static let sessionVariable = "DEVDECK_SESSION"
 
     init(servers: ServerStore, activity: ActivityLog) {
         self.servers = servers
@@ -73,9 +75,8 @@ final class MetroKeeper: ObservableObject {
     }
 
     enum Outcome {
-        /// The agent reads `reply` instead of running its command; `started` is the server
-        /// DevDeck started, if it started one.
-        case taken(reply: String, started: KeptMetro?)
+        /// The agent reads `reply` instead of running its command.
+        case taken(reply: String)
         /// DevDeck couldn't run it: the agent's own command goes ahead.
         case failed
     }
@@ -85,7 +86,7 @@ final class MetroKeeper: ObservableObject {
     func start(_ start: MetroStart, path: String?, session: AgentSession) async -> Outcome {
         prune()
         let project = ServerScanner.project(for: start.directory, fallback: "app")
-        if let reply = alreadyRunning(start, project: project, session: session) { return .taken(reply: reply, started: nil) }
+        if let reply = alreadyRunning(start, project: project, session: session) { return .taken(reply: reply) }
 
         // Ports in use, including ones DevDeck handed out that haven't opened yet.
         let taken = Set(servers.servers.flatMap(\.ports) + kept.map(\.port))
@@ -123,7 +124,8 @@ final class MetroKeeper: ObservableObject {
             reply += " Port \(start.port) belongs to \(other), so yours is on \(port): point the app at it"
                 + " (iOS simulator: launch with -RCT_jsLocation 127.0.0.1:\(port); Android: adb reverse tcp:8081 tcp:\(port))."
         }
-        return .taken(reply: reply + " To stop or restart it, ask the user (DevDeck → Dev Servers).", started: metro)
+        reply += " Stop it when you no longer need it: kill $(lsof -tiTCP:\(port) -sTCP:LISTEN)."
+        return .taken(reply: reply)
     }
 
     /// "Metro is already running in this folder" for the agent, if it is.
@@ -179,7 +181,10 @@ final class MetroKeeper: ObservableObject {
         let log = Self.logs.appendingPathComponent("metro-\(project)-\(port).log").path
         var environment = Shell.environment
         if let path { environment["PATH"] = path + ":" + Shell.path }
-        guard let pid = Self.spawn(["/bin/sh", "-c", "exec " + command], directory: directory, log: log, environment: environment)
+        if let session { environment[Self.sessionVariable] = session }
+        // `env` takes the command's leading assignments (`CI=1 npx expo start`); `exec` would
+        // look for a program named `CI=1`.
+        guard let pid = Self.spawn(["/bin/sh", "-c", "exec env " + command], directory: directory, log: log, environment: environment)
         else {
             Self.log.error("couldn't start \(command, privacy: .public) in \(directory, privacy: .public)")
             return nil

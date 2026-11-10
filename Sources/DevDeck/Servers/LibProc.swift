@@ -45,28 +45,46 @@ enum LibProc {
         return sysctlbyname("kern.argmax", &value, &size, nil, 0) == 0 ? Int(value) : 1 << 20
     }()
 
-    /// From KERN_PROCARGS2: argc, the executable path, padding, then argv. Like `ps`,
-    /// newlines show as `\012` and trailing spaces are dropped.
+    /// argv joined with spaces. Like `ps`, newlines show as `\012` and trailing spaces are dropped.
     private static func arguments(_ pid: Int32, _ buffer: inout [CChar]) -> String? {
+        guard let args = processArguments(pid, &buffer)?.args, !args.isEmpty else { return nil }
+        var line = args.joined(separator: " ").replacingOccurrences(of: "\n", with: "\\012")
+        while line.last == " " { line.removeLast() }
+        return line
+    }
+
+    /// The environment a process started with (the user's own processes only).
+    static func environment(_ pid: Int32) -> [String: String] {
+        var buffer = [CChar](repeating: 0, count: argumentsMax)
+        var environment: [String: String] = [:]
+        for entry in processArguments(pid, &buffer)?.environment ?? [] {
+            guard let equals = entry.firstIndex(of: "=") else { continue }
+            environment[String(entry[..<equals])] = String(entry[entry.index(after: equals)...])
+        }
+        return environment
+    }
+
+    /// KERN_PROCARGS2: argc, the executable path, padding, argv, then the environment.
+    private static func processArguments(_ pid: Int32, _ buffer: inout [CChar]) -> (args: [String], environment: [String])? {
         var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
         var size = buffer.count
         guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else { return nil }
-        return buffer.withUnsafeBytes { raw -> String? in
+        return buffer.withUnsafeBytes { raw in
             let argc = raw.load(as: Int32.self)
             var index = MemoryLayout<Int32>.size
             while index < size, raw[index] != 0 { index += 1 }
             while index < size, raw[index] == 0 { index += 1 }
-            var args: [String] = []
-            while args.count < argc, index < size {
+            var strings: [String] = []
+            while index < size {
                 let start = index
                 while index < size, raw[index] != 0 { index += 1 }
-                args.append(String(decoding: raw[start..<index], as: UTF8.self))
+                // The environment ends at an empty string.
+                if start == index, strings.count >= argc { break }
+                strings.append(String(decoding: raw[start..<index], as: UTF8.self))
                 index += 1
             }
-            guard !args.isEmpty else { return nil }
-            var line = args.joined(separator: " ").replacingOccurrences(of: "\n", with: "\\012")
-            while line.last == " " { line.removeLast() }
-            return line
+            let count = min(Int(argc), strings.count)
+            return (Array(strings.prefix(count)), Array(strings.dropFirst(count)))
         }
     }
 

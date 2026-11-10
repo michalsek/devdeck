@@ -129,17 +129,14 @@ final class Broker: ObservableObject {
         let claimDevices = event.agentDevice.map(claims.devices(for:)) ?? []
         if let call = event.agentDevice { claims.noteCall(call, by: session, now: now) }
         let index = devices.index
-        // A Metro DevDeck runs belongs to the session it was started for, whichever of its
-        // processes listens.
-        var owners = agents.owners
-        for server in servers.servers {
-            if let id = keeper.kept(for: server)?.session, let owner = agents.records[id]?.session { owners[server.pid] = owner }
-        }
         let policy = CallPolicy(
             devices: index, servers: servers.servers, builds: monitor.builds, leases: leases.book.leases,
-            owners: owners, androidTesting: settings.androidTesting, metroWarned: metroWarned)
+            owners: agents.owners, androidTesting: settings.androidTesting, metroWarned: metroWarned)
         var waiter = LeaseBook.Waiter(event, session: session, claimDevices: claimDevices, devices: index, now: now)
-        waiter.approval = policy.approval(event, by: session)
+        if let approval = policy.approval(event, by: session) {
+            waiter.approval = approval.reason
+            if let wait = approval.wait { waiter.deadline = min(waiter.deadline, now.addingTimeInterval(wait)) }
+        }
         waiter.needsUser = CallPolicy.needsUser(waiter, devices: index)
 
         if let refusal = policy.refusal(waiter) {
@@ -151,8 +148,7 @@ final class Broker: ObservableObject {
            let start = keeper.recognize(command, cwd: event.cwd) {
             Task {
                 switch await keeper.start(start, path: event.path, session: session) {
-                case .taken(let reply, let started):
-                    if let metro = started { agents.adopt(metro.pid, label: "Metro :\(metro.port)", by: session.id) }
+                case .taken(let reply):
                     connection.respond(.deny(reply))
                 case .failed:
                     leases.submit(waiter, connection: connection, now: .now)

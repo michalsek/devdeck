@@ -160,11 +160,6 @@ final class AgentStore: ObservableObject {
         records[id]?.booted.formUnion(devices)
     }
 
-    /// A process DevDeck started for the session (its Metro).
-    func adopt(_ pid: Int32, label: String, by id: String) {
-        records[id]?.processes.append(OwnedProcess(pid: pid, started: nil, kind: .devServer, label: label))
-    }
-
     /// The session that started each process DevDeck saw started.
     var owners: [Int32: AgentSession] {
         var owners: [Int32: AgentSession] = [:]
@@ -246,13 +241,26 @@ final class AgentStore: ObservableObject {
         scanning = true
         // Only live sessions start things; an ended one's pid may belong to someone else now.
         let roots = records.filter { $0.value.ended == nil }.compactMapValues(\.pid)
+        let agents = Dictionary(roots.map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
         let serverPIDs = Dictionary(servers.devServers.map { ($0.pid, $0) }, uniquingKeysWith: { first, _ in first })
         let buildPIDs = Set(monitor.builds.map(\.pid))
         Task.detached(priority: .utility) {
             let table = ServerScanner.recentProcessTable()
-            let found = Self.owned(roots: roots, table: table, servers: serverPIDs, builds: buildPIDs)
+            let found = Self.owned(roots: roots, table: table, servers: serverPIDs, builds: buildPIDs) {
+                Self.starter(environment: LibProc.environment($0), agents: agents)
+            }
             await MainActor.run { self.apply(found, table: table) }
         }
+    }
+
+    /// The session a process was started in, from its environment, which outlives the shell
+    /// that started it: DevDeck's `DEVDECK_SESSION` in the Metro it runs for an agent, and
+    /// Claude Code's `CLAUDE_PID` (a live agent process, which carries on after `/clear`) or
+    /// `CLAUDE_CODE_SESSION_ID`. Subagents share their parent's session.
+    nonisolated static func starter(environment: [String: String], agents: [Int32: String]) -> String? {
+        if let id = environment[MetroKeeper.sessionVariable] { return id }
+        if let pid = environment["CLAUDE_PID"].flatMap(Int32.init), let id = agents[pid] { return id }
+        return environment["CLAUDE_CODE_SESSION_ID"].map { AgentKind.claude.rawValue + ":" + $0 }
     }
 
     private func apply(_ found: [String: Owned], table: [Int32: ServerScanner.ProcessRow]) {
@@ -260,14 +268,7 @@ final class AgentStore: ObservableObject {
         let now = Date.now
         for (id, var record) in records {
             // Keep what it started while it's still running (the same process, not a reused pid).
-            var processes = record.processes.compactMap { process -> OwnedProcess? in
-                guard let row = table[process.pid] else { return nil }
-                // An adopted process learns its start time from the first table it's in.
-                guard let started = process.started else {
-                    return OwnedProcess(pid: process.pid, started: row.started, kind: process.kind, label: process.label)
-                }
-                return row.started == started ? process : nil
-            }
+            var processes = record.processes.filter { process in table[process.pid]?.started == process.started }
             record.booted.formUnion(found[id]?.emulators ?? [])
             for process in found[id]?.processes ?? [] {
                 if let index = processes.firstIndex(where: { $0.pid == process.pid }) {
@@ -282,6 +283,7 @@ final class AgentStore: ObservableObject {
                 if record.pidStarted == nil { record.pidStarted = table[pid]?.started }
                 if table[pid] == nil || table[pid]?.started != record.pidStarted {
                     record.ended = now
+                    claims.sessionEnded(id, now: now)
                     Self.log.info("\(record.session.label, privacy: .public): process \(pid) is gone")
                 }
             }
@@ -301,8 +303,11 @@ final class AgentStore: ObservableObject {
         var emulators: Set<String> = []
     }
 
+    /// `starter` names the session a server or build outside every tree was started in: one
+    /// started with `nohup … &` loses its parent as soon as the shell exits.
     nonisolated static func owned(
-        roots: [String: Int32], table: [Int32: ServerScanner.ProcessRow], servers: [Int32: DevServer], builds: Set<Int32>
+        roots: [String: Int32], table: [Int32: ServerScanner.ProcessRow], servers: [Int32: DevServer], builds: Set<Int32>,
+        starter: (Int32) -> String?
     ) -> [String: Owned] {
         var children: [Int32: [Int32]] = [:]
         for row in table.values { children[row.ppid, default: []].append(row.pid) }
@@ -325,6 +330,13 @@ final class AgentStore: ObservableObject {
                 }
                 queue += children[pid] ?? []
             }
+        }
+        let inTrees = Set(result.values.flatMap { $0.processes.map(\.pid) })
+        for pid in Set(servers.keys).union(builds).subtracting(inTrees) {
+            guard let row = table[pid], let id = starter(pid), var process = classify(row, servers: servers, builds: builds)
+            else { continue }
+            process.footprint = footprint(of: pid, children: children)
+            result[id, default: Owned()].processes.append(process)
         }
         return result
     }

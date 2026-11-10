@@ -18,21 +18,48 @@ final class AgentStoreTests: XCTestCase {
             row(200, 1, "codex"),
             row(201, 200, "/usr/bin/xcodebuild -scheme App build"),
             row(202, 200, "java org.gradle.launcher.daemon.bootstrap.GradleDaemon 8.14"),
+            row(203, 200, "/usr/bin/xcodebuild test-without-building -xctestrun Runner.xctestrun"),
+            // `nohup npx expo start &`: its shell exited, so launchd is its parent.
+            row(300, 1, "npm exec expo start --port 8093"),
+            row(301, 300, "node node_modules/.bin/expo start --port 8093"),
         ].map { ($0.pid, $0) })
-        let metro = DevServer(
-            pid: 102, ports: [8082], kind: "Metro · Expo", group: .devServer, isWeb: false, command: "", cwd: nil,
-            project: .init(name: "app", subtitle: ""), started: nil)
+        func server(_ pid: Int32, _ port: Int) -> DevServer {
+            DevServer(
+                pid: pid, ports: [port], kind: "Metro · Expo", group: .devServer, isWeb: false, command: "", cwd: nil,
+                project: .init(name: "app", subtitle: ""), started: nil)
+        }
+        // A UI-test runner (argent's, agent-device's) isn't a build.
+        XCTAssertEqual(ResourceMonitor.buildJobs(in: table).map(\.pid), [201])
 
-        let owned = AgentStore.owned(roots: ["a": 100, "b": 200], table: table, servers: [102: metro], builds: [201])
-        // The Metro counts once (its worker is part of it); the emulator is a device to shut
-        // down; build daemons serve every build, so they're nobody's leftovers.
-        XCTAssertEqual(owned["a"]?.processes.map(\.label), ["Metro · Expo :8082"])
+        let owned = AgentStore.owned(
+            roots: ["a": 100, "b": 200], table: table, servers: [102: server(102, 8082), 301: server(301, 8093)],
+            builds: [201]
+        ) { $0 == 301 ? "a" : nil }
+        // The Metro counts once (its worker is part of it); the orphaned one is found by where
+        // it was started; the emulator is a device to shut down; build daemons serve every
+        // build, so they're nobody's leftovers.
+        XCTAssertEqual(owned["a"]?.processes.map(\.label), ["Metro · Expo :8082", "Metro · Expo :8093"])
         XCTAssertEqual(owned["a"]?.emulators, ["avd:Pixel_9"])
         XCTAssertEqual(owned["b"]?.processes.map(\.label), ["Xcode build"])
 
         let left = Leftovers(processes: owned["a"]!.processes + owned["b"]!.processes + owned["b"]!.processes, devices: [
             DeviceItem(id: "avd:Pixel_9", name: "Pixel 9", detail: "", kind: .emulator, platform: .android, isRunning: true),
         ])
-        XCTAssertEqual(left.summary, "Pixel 9, Metro · Expo :8082 and 2 Xcode builds")
+        XCTAssertEqual(left.summary, "Pixel 9, Metro · Expo :8082, Metro · Expo :8093 and 2 Xcode builds")
+    }
+
+    func testSessionAProcessWasStartedIn() {
+        let agents: [Int32: String] = [100: "claude:new"]
+        let cases: [([String: String], String?)] = [
+            (["CLAUDE_CODE_SESSION_ID": "old"], "claude:old"),
+            // The agent process carries on in a new session after /clear.
+            (["CLAUDE_CODE_SESSION_ID": "old", "CLAUDE_PID": "100"], "claude:new"),
+            (["CLAUDE_CODE_SESSION_ID": "old", "CLAUDE_PID": "999"], "claude:old"),
+            ([MetroKeeper.sessionVariable: "codex:x"], "codex:x"),
+            ([:], nil),
+        ]
+        for (environment, expected) in cases {
+            XCTAssertEqual(AgentStore.starter(environment: environment, agents: agents), expected, "\(environment)")
+        }
     }
 }

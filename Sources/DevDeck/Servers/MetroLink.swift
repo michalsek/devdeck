@@ -45,8 +45,11 @@ extension Array where Element == DevServer {
 
 extension MetroLink {
     /// The app is attached to another checkout's Metro than the agent working on the
-    /// device, so the agent's changes won't show.
-    func isWrong(for project: DevServer.Project) -> Bool { !server.project.isSameCheckout(as: project) }
+    /// device, so the agent's changes won't show. A Metro the session started is its own,
+    /// wherever it runs: a subagent's runs in its worktree.
+    func isWrong(for session: AgentSession, owners: [Int32: AgentSession]) -> Bool {
+        !server.project.isSameCheckout(as: session.project) && owners[server.pid]?.id != session.id
+    }
 
     /// What the agent reads the first time it acts on such a device.
     func warning(device: String, project: DevServer.Project) -> String {
@@ -66,15 +69,20 @@ final class MetroWatcher {
     private let devices: DeviceStore
     private let servers: ServerStore
     private let leases: LeaseStore
+    private let agents: AgentStore
     private let notifier: Notifier
     private let activity: ActivityLog
     private var subscription: AnyCancellable?
     private var told: Set<String> = []
 
-    init(devices: DeviceStore, servers: ServerStore, leases: LeaseStore, notifier: Notifier, activity: ActivityLog) {
+    init(
+        devices: DeviceStore, servers: ServerStore, leases: LeaseStore, agents: AgentStore, notifier: Notifier,
+        activity: ActivityLog
+    ) {
         self.devices = devices
         self.servers = servers
         self.leases = leases
+        self.agents = agents
         self.notifier = notifier
         self.activity = activity
         guard !Demo.isOn else { return }
@@ -86,7 +94,7 @@ final class MetroWatcher {
     private func check() {
         for device in devices.running {
             guard let session = leases.lease(for: device)?.holder.session,
-                  let link = servers.servers.metro(for: device), link.isWrong(for: session.project)
+                  let link = servers.servers.metro(for: device), link.isWrong(for: session, owners: agents.owners)
             else { continue }
             let key = "\(session.id)|\(device.id)|\(link.server.pid)"
             guard told.insert(key).inserted else { continue }

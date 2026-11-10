@@ -40,7 +40,7 @@ struct CallPolicy {
         guard !Self.rewiresApp.contains(waiter.action) else { return nil }
         for id in waiter.devices {
             guard let device = devices.device(id), let link = servers.metro(for: device),
-                  link.isWrong(for: waiter.session.project)
+                  link.isWrong(for: waiter.session, owners: owners)
             else { continue }
             let key = "\(waiter.session.id)|\(id)|\(link.server.pid)"
             guard !metroWarned.contains(key) else { continue }
@@ -49,19 +49,34 @@ struct CallPolicy {
         return nil
     }
 
+    struct Approval: Equatable {
+        /// "shuts down every simulator"
+        let reason: String
+        /// How long it waits for the user, when shorter than any call's.
+        var wait: TimeInterval?
+    }
+
+    /// A kill of something DevDeck can't tie to any agent waits this long for the user's OK.
+    /// It's most likely the user's own (or, rarely, an agent's DevDeck couldn't place), and
+    /// either way an agent shouldn't sit on it for minutes.
+    static let unknownOwnerWait: TimeInterval = 60
+
     /// What the call does beyond the agent's own work, so it waits for the user's OK:
     /// "shuts down every simulator", or a kill aimed at a dev server or build that
     /// another agent or the user started.
-    func approval(_ event: HookEvent, by session: AgentSession) -> String? {
-        if let effect = event.everyoneEffect { return effect }
+    func approval(_ event: HookEvent, by session: AgentSession) -> Approval? {
+        if let effect = event.everyoneEffect { return Approval(reason: effect) }
         let byPort = event.kills.ports.compactMap { port in servers.first { $0.ports.contains(port) } }
         let byPID = event.kills.pids.compactMap { pid in servers.first { $0.pid == pid } }
-        for server in byPort + byPID where owners[server.pid]?.id != session.id {
-            return "stops \(server.project.name)'s \(server.kind) on :\(server.portList) (\(Self.starter(owners[server.pid])))"
-        }
-        for pid in event.kills.pids {
-            guard let build = builds.first(where: { $0.pid == pid }), owners[pid]?.id != session.id else { continue }
-            return "stops \(build.project ?? "another project")'s \(build.kind) (\(Self.starter(owners[pid])))"
+        let targets = (byPort + byPID).map { ($0.pid, "\($0.project.name)'s \($0.kind) on :\($0.portList)") }
+            + event.kills.pids.compactMap { pid in
+                builds.first { $0.pid == pid }.map { (pid, "\($0.project ?? "another project")'s \($0.kind)") }
+            }
+        for (pid, name) in targets where owners[pid]?.id != session.id {
+            let owner = owners[pid]
+            return Approval(
+                reason: "stops \(name) (\(owner.map { "\($0.label) started it" } ?? "you or another app started it"))",
+                wait: owner == nil ? Self.unknownOwnerWait : nil)
         }
         return nil
     }
@@ -77,10 +92,6 @@ struct CallPolicy {
             return problem.waiting(for: device.name)
         }
         return nil
-    }
-
-    private static func starter(_ owner: AgentSession?) -> String {
-        owner.map { "\($0.label) started it" } ?? "you or another app started it"
     }
 
     /// Calls that change which Metro an app loads, so a warning about it never holds them up.

@@ -24,6 +24,8 @@ struct ActivityEntry: Codable, Identifiable, Hashable {
         case cleanedUp
         /// A Metro server: started for an agent, or an app attached to another project's one.
         case metro
+        /// A limit went below the user's setting (memory, a game in front) or back, for a minute or more.
+        case limit
     }
 
     var id = UUID()

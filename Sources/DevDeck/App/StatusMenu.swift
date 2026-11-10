@@ -313,7 +313,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         let item = disabled(link.summary)
         item.subtitle = link.app
         item.image = NSImage(systemSymbolName: "server.rack", accessibilityDescription: "Metro")
-        if let agent = leases.lease(for: device)?.holder.session, link.isWrong(for: agent.project) {
+        if let agent = leases.lease(for: device)?.holder.session, link.isWrong(for: agent, owners: stores.agents.owners) {
             item.image = NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: "Wrong Metro")
             item.subtitle = "Not \(agent.project.name)'s checkout: the agent's changes won't show"
             row.subtitle = (row.subtitle.map { $0 + " · " } ?? "") + "loads \(link.server.project.name)'s Metro"

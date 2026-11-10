@@ -206,11 +206,12 @@ private struct LeaseLine: View {
 /// Under a device whose app is attached to a Metro server: "Weather · Metro :8081 ·
 /// weather-app", orange when the agent driving it works in another checkout.
 struct MetroLine: View {
+    @EnvironmentObject private var agents: AgentStore
     let link: MetroLink
     let agent: AgentSession?
 
     var body: some View {
-        let wrong = agent.map { link.isWrong(for: $0.project) } ?? false
+        let wrong = agent.map { link.isWrong(for: $0, owners: agents.owners) } ?? false
         HStack(spacing: 4) {
             Image(systemName: wrong ? "exclamationmark.triangle.fill" : "server.rack")
             Text(([link.app].compactMap { $0 } + [link.summary]).joined(separator: " · ")

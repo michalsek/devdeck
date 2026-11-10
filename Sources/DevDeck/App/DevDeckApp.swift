@@ -224,7 +224,7 @@ struct Stores {
             leases: leases, agents: agents, claims: claims, keeper: keeper, devices: devices, servers: servers,
             monitor: monitor, settings: settings, notifier: notifier, activity: activity, pulse: pulse, sounds: sounds)
         metroWatcher = MetroWatcher(
-            devices: devices, servers: servers, leases: leases, notifier: notifier, activity: activity)
+            devices: devices, servers: servers, leases: leases, agents: agents, notifier: notifier, activity: activity)
         guard !Demo.isOn else { return }
         soundHooks = sounds.$settings.map(\.enabled).removeDuplicates().sink { [hooks] in hooks.sounds = $0 }
         pulse.hasWork = { [leases] in !leases.book.waiters.isEmpty }

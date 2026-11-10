@@ -62,7 +62,7 @@ struct LeaseBook {
         var devices: [String]
         var releases: [String]
         let since: Date
-        let deadline: Date
+        var deadline: Date
         /// Heavy work the call starts.
         var pools: [Pool] = []
         /// What the call does beyond the agent's own work ("shuts down every simulator"):

@@ -58,6 +58,8 @@ final class CallPolicyTests: XCTestCase {
             return XCTFail("no warning")
         }
         XCTAssertNil(policy([simulator], servers: servers, warned: [key]).refusal(tap))
+        // Its own Metro, say a subagent's in a worktree.
+        XCTAssertNil(policy([simulator], servers: servers, owners: [7: weather]).refusal(tap))
         // Pointing the app at another Metro is how it gets fixed.
         XCTAssertNil(policy([simulator], servers: servers).refusal(call("simctl launch", [sim])))
     }
@@ -87,9 +89,13 @@ final class CallPolicyTests: XCTestCase {
         let kill = event("kill $(lsof -ti:8081)")
         XCTAssertEqual(
             policy([], servers: servers, owners: [7: maps]).approval(kill, by: weather),
-            "stops maps-app's Metro on :8081 (Codex · maps-app started it)")
+            .init(reason: "stops maps-app's Metro on :8081 (Codex · maps-app started it)"))
         XCTAssertNil(policy([], servers: servers, owners: [7: weather]).approval(kill, by: weather))
-        XCTAssertNotNil(policy([], servers: servers).approval(event("kill 7"), by: weather))
-        XCTAssertEqual(policy([]).approval(event("killall Simulator"), by: weather), CommandGuard.everyoneEffect("killall Simulator"))
+        // Nobody DevDeck knows started it: the user is asked, briefly.
+        XCTAssertEqual(
+            policy([], servers: servers).approval(event("kill 7"), by: weather),
+            .init(reason: "stops maps-app's Metro on :8081 (you or another app started it)", wait: CallPolicy.unknownOwnerWait))
+        XCTAssertEqual(
+            policy([]).approval(event("killall Simulator"), by: weather)?.reason, CommandGuard.everyoneEffect("killall Simulator"))
     }
 }
