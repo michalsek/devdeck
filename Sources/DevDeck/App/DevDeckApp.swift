@@ -172,12 +172,11 @@ final class DashboardWindow: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        pulse.setViewing("dashboard", false)
     }
 
-    /// On screen (not minimized, hidden or covered): the pages show live data.
+    /// Back on screen (opened, unminimized, uncovered): show fresh data.
     func windowDidChangeOcclusionState(_ notification: Notification) {
-        pulse.setViewing("dashboard", window?.occlusionState.contains(.visible) ?? false)
+        if window?.occlusionState.contains(.visible) == true { pulse.refreshNow() }
     }
 
     private func makeWindow() -> NSWindow {

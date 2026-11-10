@@ -71,9 +71,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
 
     // MARK: Building the menu
 
-    func menuWillOpen(_ menu: NSMenu) { stores.pulse.setViewing("menu", true) }
-
-    func menuDidClose(_ menu: NSMenu) { stores.pulse.setViewing("menu", false) }
+    func menuWillOpen(_ menu: NSMenu) { stores.pulse.refreshNow() }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()

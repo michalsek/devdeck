@@ -2,10 +2,10 @@
 
 ## Finding devices and servers
 
-- **Refreshing.** Every scan runs on one shared tick: every 5 seconds while the menu or
-  dashboard is open, an agent made a call in the last 2 minutes or a call is waiting, and
-  every 30 seconds otherwise. Opening the menu or dashboard refreshes at once. Processes,
-  ports and working directories are read from the kernel, not with `ps` or `lsof`.
+- **Refreshing.** Every scan runs on one shared tick that follows the agents: a hook call
+  brings it to 5 seconds, and each tick without one doubles it, up to a minute. A call
+  waiting for room keeps it at 5 seconds. Opening the menu or dashboard refreshes at once.
+  Processes, ports and working directories are read from the kernel, not with `ps` or `lsof`.
 - **Devices:** `simctl`, `devicectl` and `adb`; AVDs are the `.ini` files in `~/.android/avd`
   (the Android SDK at `$ANDROID_HOME` or `~/Library/Android/sdk`). Physical iOS devices
   refresh every 30 seconds at most.

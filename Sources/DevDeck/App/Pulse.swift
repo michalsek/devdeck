@@ -2,25 +2,21 @@ import Foundation
 
 /// The one timer behind DevDeck's periodic scans. Every store refreshes on the same tick,
 /// so DevDeck wakes once per tick rather than once per store (each wake takes the app out
-/// of App Nap, which runningboardd has to process). It ticks every `busyInterval` while
-/// the user is looking or an agent is active, and every `quietInterval` otherwise.
+/// of App Nap, which runningboardd has to process).
+///
+/// The tick follows the agents: a hook call brings it down to `fastest`, and each tick
+/// without one doubles it, up to `slowest`. A call waiting for room keeps it at `fastest`.
+/// Opening the menu or dashboard refreshes once, at once.
 @MainActor
 final class Pulse {
-    static let busyInterval: TimeInterval = 5
-    static let quietInterval: TimeInterval = 30
-    /// An agent counts as active this long after its last hook call.
-    static let activeWindow: TimeInterval = 120
+    static let fastest: TimeInterval = 5
+    static let slowest: TimeInterval = 60
 
-    /// Work that keeps the pulse busy besides viewers and agent calls (e.g. waiting calls).
+    /// Work that keeps the tick fast besides agent calls (e.g. waiting calls).
     var hasWork: () -> Bool = { false }
     private var handlers: [() -> Void] = []
-    private var viewers: Set<String> = []
-    private var lastActivity = Date.distantPast
+    private var interval = Pulse.fastest
     private var timer: Timer?
-
-    var isBusy: Bool {
-        !viewers.isEmpty || Date.now.timeIntervalSince(lastActivity) < Self.activeWindow || hasWork()
-    }
 
     /// Starts ticking with these handlers, in order.
     func start(_ handlers: [() -> Void]) {
@@ -28,20 +24,13 @@ final class Pulse {
         schedule()
     }
 
-    /// The menu or dashboard opened (fresh data now) or closed.
-    func setViewing(_ viewer: String, _ viewing: Bool) {
-        if viewing {
-            viewers.insert(viewer)
-            tick()
-        } else {
-            viewers.remove(viewer)
-        }
-    }
+    /// The menu or dashboard opened: show fresh data.
+    func refreshNow() { tick() }
 
-    /// An agent called: tick within `busyInterval` if the next tick is further off.
+    /// An agent called: tick within `fastest`, and keep ticking fast while calls come.
     func noteActivity() {
-        lastActivity = .now
-        if let fire = timer?.fireDate, fire.timeIntervalSinceNow > Self.busyInterval {
+        interval = Self.fastest
+        if let fire = timer?.fireDate, fire.timeIntervalSinceNow > Self.fastest {
             schedule()
         }
     }
@@ -49,12 +38,12 @@ final class Pulse {
     private func tick() {
         guard !handlers.isEmpty else { return }
         handlers.forEach { $0() }
+        interval = hasWork() ? Self.fastest : min(interval * 2, Self.slowest)
         schedule()
     }
 
     private func schedule() {
         timer?.invalidate()
-        let interval = isBusy ? Self.busyInterval : Self.quietInterval
         let timer = Timer(timeInterval: interval, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
