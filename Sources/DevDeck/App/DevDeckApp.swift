@@ -1,6 +1,5 @@
 import AppKit
 import Combine
-import ServiceManagement
 import SwiftUI
 
 /// DevDeck is an AppKit app: the menu bar item is a native `NSMenu` (so it gets the
@@ -27,32 +26,24 @@ enum DevDeckMain {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    let peon = PeonStore()
-    let devices = DeviceStore()
-    let servers = ServerStore()
-    let settings = AppSettings()
-    let monitor = ResourceMonitor()
-    lazy var leases = LeaseStore(devices: devices, settings: settings, servers: servers, monitor: monitor)
-    let hooks = HookInstaller()
-    lazy var markers = MarkerController(leases: leases, devices: devices, settings: settings)
+    let stores = Stores()
+    lazy var markers = MarkerController(leases: stores.leases, devices: stores.devices, settings: stores.settings)
 
     private var statusMenu: StatusMenu?
     private var pageItems: [DashboardPage: NSMenuItem] = [:]
     private var subscriptions = Set<AnyCancellable>()
     private lazy var dashboard = DashboardWindow { [unowned self] in
-        AnyView(DashboardView().environmentObjects(peon, devices, servers, settings, leases, hooks))
+        AnyView(DashboardView().environment(stores))
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = mainMenu()
-        leases.openPage = { [unowned self] page in dashboard.show(page) }
-        peon.$installed.removeDuplicates()
+        stores.notifier.onOpen = { [unowned self] page in dashboard.show(page) }
+        stores.peon.$installed.removeDuplicates()
             .sink { [unowned self] installed in updatePageItems(peonInstalled: installed) }
             .store(in: &subscriptions)
         statusMenu = StatusMenu(
-            peon: peon, devices: devices, servers: servers, settings: settings, leases: leases, hooks: hooks,
-            markers: markers,
-            openDashboard: { [unowned self] page in dashboard.show(page) })
+            stores: stores, markers: markers, openDashboard: { [unowned self] page in dashboard.show(page) })
         handleLaunchArguments()
     }
 
@@ -69,8 +60,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let args = CommandLine.arguments
         if let index = args.firstIndex(of: "--hooks"), index + 1 < args.count {
             let wanted = Set(args[index + 1].split(separator: ",").compactMap { AgentKind(rawValue: String($0)) })
-            for agent in AgentKind.allCases where hooks.isAvailable(agent) {
-                hooks.set(agent, enabled: wanted.contains(agent))
+            for agent in AgentKind.allCases where stores.hooks.isAvailable(agent) {
+                stores.hooks.set(agent, enabled: wanted.contains(agent))
             }
         }
         guard let index = args.firstIndex(of: "--open"), index + 1 < args.count else { return }
@@ -199,52 +190,46 @@ final class DashboardWindow: NSObject, NSWindowDelegate {
     }
 }
 
-/// App-level settings that aren't peon-ping's.
+/// Every store the app runs, made once at launch.
 @MainActor
-final class AppSettings: ObservableObject {
-    @Published private(set) var launchAtLogin = SMAppService.mainApp.status == .enabled
-    @Published private(set) var lastError: String?
-    @Published var menuBarIcon: MenuBarIcon {
-        didSet { UserDefaults.standard.set(menuBarIcon.rawValue, forKey: "menuBarIcon") }
-    }
-    /// Your hold on a device ends after this many minutes without input on the Mac; 0 never.
-    @Published var holdReleaseMinutes: Int {
-        didSet { UserDefaults.standard.set(holdReleaseMinutes, forKey: "holdReleaseMinutes") }
-    }
-    /// Post a notification when an agent's call has to wait.
-    @Published var notifyWaits: Bool {
-        didSet { UserDefaults.standard.set(notifyWaits, forKey: "notifyWaits") }
-    }
-    /// Show who drives a simulator or emulator on the device, through the companion app.
-    @Published var deviceMarkers: Bool {
-        didSet { UserDefaults.standard.set(deviceMarkers, forKey: "deviceMarkers") }
-    }
+struct Stores {
+    let peon = PeonStore()
+    let devices = DeviceStore()
+    let servers = ServerStore()
+    let settings = AppSettings()
+    let monitor = ResourceMonitor()
+    let claims = ClaimStore()
+    let notifier = Notifier()
+    let hooks = HookInstaller()
+    let activity = ActivityLog()
+    let leases: LeaseStore
+    let agents: AgentStore
+    let keeper: MetroKeeper
+    let broker: Broker
+    let metroWatcher: MetroWatcher
 
     init() {
-        menuBarIcon = UserDefaults.standard.string(forKey: "menuBarIcon").flatMap(MenuBarIcon.init) ?? .dashboard
-        deviceMarkers = UserDefaults.standard.object(forKey: "deviceMarkers") as? Bool ?? true
-        holdReleaseMinutes = UserDefaults.standard.object(forKey: "holdReleaseMinutes") as? Int ?? 10
-        notifyWaits = UserDefaults.standard.object(forKey: "notifyWaits") as? Bool ?? true
-    }
-
-    func setLaunchAtLogin(_ value: Bool) {
-        do {
-            if value { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
-            lastError = nil
-        } catch {
-            lastError = "Open at login: \(error.localizedDescription)"
-        }
-        launchAtLogin = SMAppService.mainApp.status == .enabled
+        if !Demo.isOn { notifier.setUp() }
+        leases = LeaseStore(
+            devices: devices, settings: settings, servers: servers, monitor: monitor, claims: claims, notifier: notifier,
+            activity: activity)
+        agents = AgentStore(
+            devices: devices, servers: servers, monitor: monitor, notifier: notifier, activity: activity, leases: leases,
+            claims: claims)
+        keeper = MetroKeeper(servers: servers, activity: activity)
+        broker = Broker(
+            leases: leases, agents: agents, claims: claims, keeper: keeper, devices: devices, servers: servers,
+            monitor: monitor, settings: settings, notifier: notifier, activity: activity)
+        metroWatcher = MetroWatcher(
+            devices: devices, servers: servers, leases: leases, notifier: notifier, activity: activity)
     }
 }
 
 extension View {
-    func environmentObjects(
-        _ peon: PeonStore, _ devices: DeviceStore, _ servers: ServerStore, _ app: AppSettings,
-        _ leases: LeaseStore, _ hooks: HookInstaller
-    ) -> some View {
-        environmentObject(peon).environmentObject(devices).environmentObject(servers).environmentObject(app)
-            .environmentObject(leases).environmentObject(hooks).environmentObject(leases.monitor)
-            .environmentObject(leases.claims)
+    func environment(_ stores: Stores) -> some View {
+        environmentObject(stores.peon).environmentObject(stores.devices).environmentObject(stores.servers)
+            .environmentObject(stores.settings).environmentObject(stores.leases).environmentObject(stores.hooks)
+            .environmentObject(stores.monitor).environmentObject(stores.claims).environmentObject(stores.activity)
+            .environmentObject(stores.agents).environmentObject(stores.keeper).environmentObject(stores.broker)
     }
 }

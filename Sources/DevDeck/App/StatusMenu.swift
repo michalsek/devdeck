@@ -8,27 +8,29 @@ import SwiftUI
 final class StatusMenu: NSObject, NSMenuDelegate {
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let menu = NSMenu()
+    private let stores: Stores
     private let peon: PeonStore
     private let devices: DeviceStore
     private let servers: ServerStore
     private let settings: AppSettings
     private let leases: LeaseStore
+    private let claims: ClaimStore
+    private let monitor: ResourceMonitor
     private let hooks: HookInstaller
     private let markers: MarkerController
     private let openDashboard: (DashboardPage?) -> Void
     private var subscriptions = Set<AnyCancellable>()
 
-    init(
-        peon: PeonStore, devices: DeviceStore, servers: ServerStore, settings: AppSettings,
-        leases: LeaseStore, hooks: HookInstaller, markers: MarkerController,
-        openDashboard: @escaping (DashboardPage?) -> Void
-    ) {
-        self.peon = peon
-        self.devices = devices
-        self.servers = servers
-        self.settings = settings
-        self.leases = leases
-        self.hooks = hooks
+    init(stores: Stores, markers: MarkerController, openDashboard: @escaping (DashboardPage?) -> Void) {
+        self.stores = stores
+        peon = stores.peon
+        devices = stores.devices
+        servers = stores.servers
+        settings = stores.settings
+        leases = stores.leases
+        claims = stores.claims
+        monitor = stores.monitor
+        hooks = stores.hooks
         self.markers = markers
         self.openDashboard = openDashboard
         super.init()
@@ -79,17 +81,17 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
         addServers()
         menu.addItem(.separator())
-        for error in [devices.lastError, leases.claims.lastError, servers.lastError, peon.lastError, settings.lastError,
+        for error in [devices.lastError, claims.lastError, servers.lastError, peon.lastError, settings.lastError,
                       hooks.lastError].compactMap({ $0 }) {
             let item = NSMenuItem(title: error, action: nil, keyEquivalent: "")
             item.attributedTitle = NSAttributedString(string: error, attributes: [.foregroundColor: NSColor.systemRed])
             item.isEnabled = false
             menu.addItem(item)
         }
-        let monitor = leases.monitor
+        addAgents()
         let resources = ActionItem("Resources") { [weak self] in self?.openDashboard(.resources) }
         let room = leases.waitingForRoom.count
-        resources.subtitle = ["\(monitor.snapshot.memoryFree)% memory free" + (monitor.memoryLow ? " (low)" : ""),
+        resources.subtitle = [monitor.memoryProblem ?? "\(monitor.snapshot.memoryFree)% memory free",
                               monitor.builds.isEmpty ? nil : Pool.build.count(monitor.builds.count) + " running",
                               room == 0 ? nil : "\(room) waiting for room"]
             .compactMap { $0 }.joined(separator: " · ")
@@ -140,6 +142,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
             let actions = NSMenu()
             addClaims(of: device, to: actions, row: row)
             addLease(of: device, to: actions, row: row)
+            addMetro(of: device, to: actions, row: row)
             if device.canStop {
                 actions.addItem(devices.busy.contains(device.id)
                     ? disabled("Shutting Down…")
@@ -212,6 +215,28 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         }
     }
 
+    /// How many agents are working, and Clean Up for finished ones that left things running.
+    private func addAgents() {
+        let agents = stores.agents
+        let now = Date.now
+        let records = agents.sorted
+        guard !records.isEmpty else { return }
+        let working = records.filter { $0.state(now: now, idleAfter: AgentStore.idleAfter) == .working }.count
+        let done = records.filter { $0.state(now: now, idleAfter: AgentStore.idleAfter) != .working }
+            .map { ($0, agents.leftovers(of: $0)) }.filter { !$1.isEmpty }
+        let item = ActionItem("Agents") { [weak self] in self?.openDashboard(.agents) }
+        item.subtitle = ["\(working) working",
+                         done.isEmpty ? nil : "\(done.count) left things running"].compactMap { $0 }.joined(separator: " · ")
+        item.image = NSImage(systemSymbolName: "cpu", accessibilityDescription: nil)
+        menu.addItem(item)
+        for (record, left) in done {
+            let clean = ActionItem("Clean Up After \(record.session.label)") { agents.cleanUp(record.id) }
+            clean.subtitle = "Stops " + left.summary
+            clean.isEnabled = !agents.cleaning.contains(record.id)
+            menu.addItem(clean)
+        }
+    }
+
     /// Who holds the device, and the hold / take over / queue / release actions.
     private func addLease(of device: DeviceItem, to actions: NSMenu, row: NSMenuItem) {
         let queued = leases.isQueued(for: device)
@@ -258,7 +283,6 @@ final class StatusMenu: NSObject, NSMenuDelegate {
     /// agent-device sessions that have claimed the device. Release Claim is offered here only
     /// for stale ones (the dashboard asks for a second click on any).
     private func addClaims(of device: DeviceItem, to actions: NSMenu, row: NSMenuItem) {
-        let claims = leases.claims
         let found = claims.claims(for: device)
         guard let first = found.first else { return }
         for status in found {
@@ -279,6 +303,21 @@ final class StatusMenu: NSObject, NSMenuDelegate {
             row.subtitle = ClaimText.summary(first, state: state, now: .now)
             row.image = .statusDot(state.isStale ? .systemOrange : .systemPurple)
         }
+    }
+
+    /// The Metro server the device's app loads, flagged when the agent on it works elsewhere.
+    private func addMetro(of device: DeviceItem, to actions: NSMenu, row: NSMenuItem) {
+        guard let link = servers.servers.metro(for: device) else { return }
+        let item = disabled(link.summary)
+        item.subtitle = link.app
+        item.image = NSImage(systemSymbolName: "server.rack", accessibilityDescription: "Metro")
+        if let agent = leases.lease(for: device)?.holder.session, link.isWrong(for: agent.project) {
+            item.image = NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: "Wrong Metro")
+            item.subtitle = "Not \(agent.project.name)'s checkout: the agent's changes won't show"
+            row.subtitle = (row.subtitle.map { $0 + " · " } ?? "") + "loads \(link.server.project.name)'s Metro"
+        }
+        actions.addItem(item)
+        actions.addItem(.separator())
     }
 
     /// Waiting agent calls, each with a submenu to let it go next or turn it away.
@@ -306,7 +345,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
     private func hosted(_ view: some View, width: CGFloat = 300) -> NSMenuItem {
         let host = NSHostingView(rootView: view
             .frame(minWidth: width, maxWidth: .infinity, alignment: .leading)
-            .environmentObjects(peon, devices, servers, settings, leases, hooks))
+            .environment(stores))
         host.frame.size = host.fittingSize
         host.autoresizingMask = [.width]
         let item = NSMenuItem()

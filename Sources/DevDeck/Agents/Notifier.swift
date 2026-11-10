@@ -17,11 +17,15 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     var onOpen: ((DashboardPage) -> Void)?
     /// Release Claim on a stale-claim notification, with the claim's agent-device session.
     var onReleaseClaim: ((String) -> Void)?
+    /// Clean Up on a leftovers notification, with the agent session's id.
+    var onCleanUp: ((String) -> Void)?
 
     private let center = UNUserNotificationCenter.current()
     private static let waitingCategory = "waiting"
     private static let claimCategory = "claim"
     private static let releaseClaim = "release-claim"
+    private static let leftoversCategory = "leftovers"
+    private static let cleanUp = "clean-up"
 
     func setUp() {
         center.delegate = self
@@ -36,6 +40,10 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             UNNotificationCategory(
                 identifier: Self.claimCategory,
                 actions: [UNNotificationAction(identifier: Self.releaseClaim, title: "Release Claim", options: .destructive)],
+                intentIdentifiers: []),
+            UNNotificationCategory(
+                identifier: Self.leftoversCategory,
+                actions: [UNNotificationAction(identifier: Self.cleanUp, title: "Clean Up", options: .destructive)],
                 intentIdentifiers: []),
         ])
         center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
@@ -80,6 +88,20 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         center.removeDeliveredNotifications(withIdentifiers: ["claim-" + session])
     }
 
+    /// A finished agent session left processes or devices running.
+    func leftovers(_ session: String, title: String, body: String) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.categoryIdentifier = Self.leftoversCategory
+        content.userInfo = ["page": DashboardPage.agents.rawValue, "agentSession": session]
+        post("leftovers-" + session, content)
+    }
+
+    func clearLeftovers(_ session: String) {
+        center.removeDeliveredNotifications(withIdentifiers: ["leftovers-" + session])
+    }
+
     func plain(_ identifier: String, title: String, body: String, page: DashboardPage) {
         let content = UNMutableNotificationContent()
         content.title = title
@@ -108,9 +130,12 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         let action = response.actionIdentifier
         let page = (response.notification.request.content.userInfo["page"] as? String).flatMap(DashboardPage.init)
         let session = response.notification.request.content.userInfo["session"] as? String
+        let agentSession = response.notification.request.content.userInfo["agentSession"] as? String
         await MainActor.run {
             if action == Self.releaseClaim, let session {
                 onReleaseClaim?(session)
+            } else if action == Self.cleanUp, let agentSession {
+                onCleanUp?(agentSession)
             } else if let action = Action(rawValue: action),
                let id = UUID(uuidString: identifier.replacingOccurrences(of: "waiting-", with: "")) {
                 onAction?(action, id)

@@ -1,3 +1,4 @@
+import DevDeckProtocol
 import Foundation
 
 /// The coding agents DevDeck installs hooks into.
@@ -33,6 +34,8 @@ struct HookEvent: Equatable {
         case toolUse, turnEnd, sessionEnd
         /// A shell command that ran, and agent-device turned it away with `DEVICE_IN_USE`.
         case deviceInUse
+        /// A command that builds, installs or launches an app on a device finished.
+        case result(failed: Bool)
     }
 
     let kind: Kind
@@ -53,46 +56,83 @@ struct HookEvent: Equatable {
     let agentDevice: AgentDeviceCall?
     /// For `deviceInUse`: the agent-device session the error names as the device's holder.
     let holder: String?
+    /// After a command: the end of its output.
+    private(set) var output: String?
+    /// The shell command, for a Bash call.
+    let command: String?
+    /// The agent's PATH.
+    let path: String?
+    /// How long the hook will wait for an answer.
+    let maxWait: TimeInterval
+    /// The agent's process: the hook's parent.
+    let agentPID: Int32?
+    /// What the call does to every agent (see `CommandGuard`), so it needs the user's OK.
+    let everyoneEffect: String?
+    /// Processes the command stops, by pid or by the port they listen on.
+    let kills: CommandGuard.Kills
+
+    /// The part of the wait the hook allows that DevDeck uses.
+    var waitLimit: TimeInterval { min(maxWait, HookProtocol.maxWait) }
 
     init?(json: [String: Any]) {
-        guard let agent = (json["agent"] as? String).flatMap(AgentKind.init),
+        guard let agent = (json[HookProtocol.Field.agent] as? String).flatMap(AgentKind.init),
               let sessionID = json["session_id"] as? String
         else { return nil }
         self.agent = agent
         self.sessionID = sessionID
         cwd = json["cwd"] as? String
-        host = json["host"] as? String
+        host = json[HookProtocol.Field.host] as? String
+        maxWait = json[HookProtocol.Field.maxWait] as? Double ?? HookProtocol.maxWait
+        agentPID = (json[HookProtocol.Field.agentPID] as? Int).map(Int32.init)
 
         let input = json["tool_input"] as? [String: Any] ?? [:]
         let command = json["tool_name"] as? String == "Bash" ? input["command"] as? String : nil
+        self.command = command
+        path = json[HookProtocol.Field.path] as? String
         agentDevice = command.flatMap(AgentDeviceCall.parse)
+        kills = command.map(CommandGuard.kills) ?? CommandGuard.Kills()
 
         switch json["hook_event_name"] as? String {
         case "SessionEnd", "Stop":
             kind = json["hook_event_name"] as? String == "Stop" ? .turnEnd : .sessionEnd
             action = kind == .turnEnd ? "turn ended" : "session ended"
+            everyoneEffect = nil
             targets = []
             releases = []
             pools = []
             holder = nil
         case "PostToolUse", "PostToolUseFailure":
-            // `devdeck-hook` only forwards these with the text of a DEVICE_IN_USE error.
-            guard let output = json["tool_output"] as? String, output.contains("DEVICE_IN_USE") else { return nil }
-            kind = .deviceInUse
-            action = "DEVICE_IN_USE"
-            holder = AgentDevice.holder(inError: output)
-            targets = (agentDevice?.devices ?? []).map(DeviceTarget.id)
+            // `devdeck-hook` forwards these with the text of a DEVICE_IN_USE error, or the end
+            // of a device command's output.
+            guard let output = json[HookProtocol.Field.toolOutput] as? String else { return nil }
+            everyoneEffect = nil
+            self.output = output
+            if output.contains("DEVICE_IN_USE") {
+                kind = .deviceInUse
+                action = "DEVICE_IN_USE"
+                holder = AgentDevice.holder(inError: output)
+                targets = (agentDevice?.devices ?? []).map(DeviceTarget.id)
+            } else {
+                guard let command, let parsed = Self.shellCommand(command) else { return nil }
+                kind = .result(failed: json["hook_event_name"] as? String == "PostToolUseFailure")
+                action = parsed.action
+                holder = nil
+                targets = parsed.targets
+            }
             releases = []
             pools = []
         case "PreToolUse":
             let tool = json["tool_name"] as? String ?? ""
             var parsed: (action: String, targets: [DeviceTarget], releases: [DeviceTarget])?
             var pools: [Pool] = []
+            var effect: String?
             if tool.hasPrefix(Self.argentPrefix) {
                 let name = String(tool.dropFirst(Self.argentPrefix.count))
                 parsed = Self.argentCall(name, input)
                 pools = Pool.forArgent(name, input)
+                effect = CommandGuard.everyoneEffect(argent: name, input)
             } else if let command {
+                effect = CommandGuard.everyoneEffect(command)
                 parsed = Self.shellCommand(command)
                 pools = Pool.forShell(command)
                 if let call = agentDevice {
@@ -104,9 +144,14 @@ struct HookEvent: Equatable {
                         : (previous.action, previous.targets + devices, previous.releases)
                 }
                 if parsed == nil, !pools.isEmpty { parsed = (Self.shortName(command), [], []) }
+                if parsed == nil, effect != nil || !kills.isEmpty {
+                    parsed = (command.split(separator: " ").prefix(3).joined(separator: " "), [], [])
+                }
             }
+            everyoneEffect = effect
             guard let parsed,
-                  agentDevice != nil || !(parsed.targets.isEmpty && parsed.releases.isEmpty && pools.isEmpty)
+                  agentDevice != nil || effect != nil || !kills.isEmpty
+                    || !(parsed.targets.isEmpty && parsed.releases.isEmpty && pools.isEmpty)
             else { return nil }
             kind = .toolUse
             (action, targets, releases) = parsed
@@ -124,7 +169,7 @@ struct HookEvent: Equatable {
     static func argentCall(_ tool: String, _ input: [String: Any])
         -> (action: String, targets: [DeviceTarget], releases: [DeviceTarget]) {
         var ids = ["udid", "device_id", "deviceId", "serial"].compactMap { input[$0] as? String }
-        if let avd = input["avdName"] as? String { ids.append("avd:" + avd) }
+        if let avd = input["avdName"] as? String { ids.append(DeviceItem.avdID(avd)) }
         if tool == "stop-simulator-server" || tool == "stop-all-simulator-servers" {
             let devices = input["devices"] as? [String] ?? ids
             return (tool, [], devices.map(DeviceTarget.id))
@@ -133,28 +178,16 @@ struct HookEvent: Equatable {
     }
 
     /// Finds `xcrun simctl`, `adb` and `emulator` invocations in a shell command.
-    /// Best effort: each `;`, `&&`, `|` or newline separated part is read on its own.
     static func shellCommand(_ command: String)
         -> (action: String, targets: [DeviceTarget], releases: [DeviceTarget])? {
         var actions: [String] = []
         var targets: [DeviceTarget] = []
         var releases: [DeviceTarget] = []
 
-        for part in command.components(separatedBy: CharacterSet(charactersIn: ";|&\n")) {
-            var words = part.split(whereSeparator: \.isWhitespace)
-                .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "\"'()")) }
-            // Leading environment assignments, e.g. ANDROID_SERIAL=emulator-5554 adb shell …
-            var environment: [String: String] = [:]
-            while let first = words.first, let equals = first.firstIndex(of: "="), !first.hasPrefix("-") {
-                environment[String(first[..<equals])] = String(first[first.index(after: equals)...])
-                words.removeFirst()
-            }
-            guard let program = words.first.map({ $0.split(separator: "/").last.map(String.init) ?? $0 }) else { continue }
-            var args = Array(words.dropFirst())
-
-            switch program {
-            case "xcrun" where args.first == "simctl", "simctl":
-                if program == "xcrun" { args.removeFirst() }
+        for invocation in ShellCommand.invocations(command) {
+            var args = invocation.args
+            switch invocation.program {
+            case "simctl":
                 guard let verb = args.first, !simctlHostCommands.contains(verb) else { continue }
                 let rest = args.dropFirst()
                 let ids = rest.filter(isUUID).map(DeviceTarget.id)
@@ -167,7 +200,7 @@ struct HookEvent: Equatable {
                 if !devices.isEmpty || rest.contains("all") { actions.append("simctl " + verb) }
 
             case "adb":
-                var serial = environment["ANDROID_SERIAL"]
+                var serial = invocation.environment["ANDROID_SERIAL"]
                 while let flag = args.first, flag.hasPrefix("-") {
                     args.removeFirst()
                     if flag == "-s", let value = args.first {
@@ -184,11 +217,31 @@ struct HookEvent: Equatable {
                 }
                 actions.append("adb " + verb)
 
+            case "devicectl":
+                // xcrun devicectl device install app --device <id> App.app
+                guard let device = value(of: ["--device", "-d"], in: args) else { continue }
+                targets.append(.id(device))
+                actions.append((["devicectl"] + args.prefix(2)).joined(separator: " "))
+
+            case "xcodebuild":
+                // -destination 'platform=iOS,id=00008150-…'
+                guard let destination = value(of: ["-destination"], in: args),
+                      let id = destination.split(separator: ",").first(where: { $0.hasPrefix("id=") })?.dropFirst(3)
+                else { continue }
+                targets.append(.id(String(id)))
+                actions.append("xcodebuild")
+
+            case "expo", "react-native":
+                // expo run:ios --device <udid or name>, react-native run-ios --udid <udid>, run-android --deviceId <serial>
+                guard let device = value(of: ["--udid", "--deviceId", "--device", "-d"], in: args) else { continue }
+                targets.append(.id(device))
+                actions.append(([invocation.program] + args.prefix(1)).joined(separator: " "))
+
             case "emulator":
                 let avd = args.firstIndex(of: "-avd").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil }
                     ?? args.first { $0.hasPrefix("@") }.map { String($0.dropFirst()) }
                 guard let avd else { continue }
-                targets.append(.id("avd:" + avd))
+                targets.append(.id(DeviceItem.avdID(avd)))
                 actions.append("emulator")
 
             default:
@@ -199,11 +252,21 @@ struct HookEvent: Equatable {
         return (actions.first ?? "shell", targets, releases)
     }
 
-    /// "npx expo run:ios" from "cd app && npx expo run:ios --device X", for display.
+    /// The value after the first of `flags` (`--device X` or `--device=X`).
+    private static func value(of flags: [String], in args: [String]) -> String? {
+        for (index, arg) in args.enumerated() {
+            for flag in flags {
+                if arg == flag, index + 1 < args.count { return args[index + 1] }
+                if arg.hasPrefix(flag + "=") { return String(arg.dropFirst(flag.count + 1)) }
+            }
+        }
+        return nil
+    }
+
+    /// The part of a command that starts heavy work, shortened for display:
+    /// "npx expo run:ios" out of "cd app && npx expo run:ios --device X".
     static func shortName(_ command: String) -> String {
-        let part = command.components(separatedBy: CharacterSet(charactersIn: ";|&\n"))
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .first { !Pool.forShell($0).isEmpty } ?? command
+        let part = ShellCommand.invocations(command).first { !Pool.forShell($0.text).isEmpty }?.text ?? command
         return part.split(separator: " ").prefix(3).joined(separator: " ")
     }
 
@@ -218,5 +281,25 @@ struct HookEvent: Equatable {
 
     private static func isUUID(_ word: String) -> Bool {
         UUID(uuidString: word) != nil
+    }
+}
+
+extension LeaseBook.Waiter {
+    /// The call behind an agent's tool use: the devices it works on and is done with, by
+    /// DevDeck's ids, and the room it needs (none to boot a device that's already running).
+    /// `claimDevices` are the devices an agent-device call's launcher or session is bound to.
+    init(_ event: HookEvent, session: AgentSession, claimDevices: [String], devices: DeviceIndex, now: Date) {
+        var targets = event.targets.flatMap(devices.resolve)
+        var releases = event.releases.flatMap(devices.resolve)
+        if let call = event.agentDevice, call.devices.isEmpty {
+            let found = claimDevices.flatMap { devices.resolve(.id($0)) }
+            if call.closes { releases += found } else { targets += found }
+        }
+        let booting: Set<Pool> = [.iosSimulator, .androidEmulator]
+        let alreadyRunning = !targets.isEmpty && targets.allSatisfy(devices.isRunning)
+        self.init(
+            id: UUID(), session: session, action: event.action, devices: targets, releases: releases,
+            since: now, deadline: now.addingTimeInterval(event.waitLimit),
+            pools: event.pools.filter { !(booting.contains($0) && alreadyRunning) })
     }
 }

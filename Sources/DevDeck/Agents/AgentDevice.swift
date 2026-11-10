@@ -1,3 +1,4 @@
+import DevDeckProtocol
 import Foundation
 
 /// agent-device, the CLI behind T3 Code's device tools, and the device claims it keeps.
@@ -54,56 +55,41 @@ struct AgentDeviceCall: Equatable {
 
     var closes: Bool { subcommand == "close" }
 
-    /// Finds the first `agent-device` invocation in a shell command.
+    /// Finds the first `agent-device` invocation in a shell command: `agent-device …`,
+    /// `npx agent-device …`, `pnpm exec agent-device …`, `node …/agent-device.mjs …`.
     static func parse(_ command: String) -> AgentDeviceCall? {
-        for part in command.components(separatedBy: CharacterSet(charactersIn: ";|&\n")) {
-            var words = part.split(whereSeparator: \.isWhitespace)
-                .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "\"'()")) }
-            while let first = words.first, first.contains("="), !first.hasPrefix("-") { words.removeFirst() }
-            // `agent-device …`, `npx agent-device …`, `pnpm exec agent-device …`, `node …/agent-device.mjs …`
-            var index = 0
-            while index < min(words.count, 2), runners.contains(words[index]) { index += 1 }
-            guard index < words.count, isProgram(words[index]) else { continue }
-            let program = words[index]
-            let args = Array(words[(index + 1)...])
-
-            var subcommand: String?
-            var session: String?
-            var devices: [String] = []
-            var position = 0
-            while position < args.count {
-                let arg = args[position]
-                if arg.hasPrefix("-") {
-                    let (flag, inline) = arg.split(separator: "=", maxSplits: 1).map(String.init).splitFirst
-                    var value = inline
-                    if value == nil, valuedFlags.contains(flag), position + 1 < args.count {
-                        position += 1
-                        value = args[position]
-                    }
-                    if let value {
-                        switch flag {
-                        case "--session": session = value
-                        case "--udid", "--serial": devices.append(value)
-                        default: break
-                        }
-                    }
-                } else if subcommand == nil {
-                    subcommand = arg
+        guard let invocation = ShellCommand.invocations(command).first(where: {
+            $0.program == "agent-device" || $0.program == "agent-device.mjs"
+        }) else { return nil }
+        let args = invocation.args
+        var subcommand: String?
+        var session: String?
+        var devices: [String] = []
+        var position = 0
+        while position < args.count {
+            let arg = args[position]
+            if arg.hasPrefix("-") {
+                let (flag, inline) = arg.split(separator: "=", maxSplits: 1).map(String.init).splitFirst
+                var value = inline
+                if value == nil, valuedFlags.contains(flag), position + 1 < args.count {
+                    position += 1
+                    value = args[position]
                 }
-                position += 1
+                if let value {
+                    switch flag {
+                    case "--session": session = value
+                    case "--udid", "--serial": devices.append(value)
+                    default: break
+                    }
+                }
+            } else if subcommand == nil {
+                subcommand = arg
             }
-            return AgentDeviceCall(
-                program: program, subcommand: subcommand ?? "", session: session ?? launcherSession(program),
-                devices: devices)
+            position += 1
         }
-        return nil
-    }
-
-    private static let runners: Set<String> = ["npx", "bunx", "pnpx", "pnpm", "yarn", "exec", "dlx", "node", "command"]
-
-    private static func isProgram(_ word: String) -> Bool {
-        let name = word.split(separator: "/").last.map(String.init) ?? word
-        return name == "agent-device" || name == "agent-device.mjs"
+        return AgentDeviceCall(
+            program: invocation.path, subcommand: subcommand ?? "",
+            session: session ?? launcherSession(invocation.path), devices: devices)
     }
 
     /// T3 Code gives each thread a launcher at `…/device/targets/<session>/agent-device`.
@@ -138,7 +124,7 @@ struct AgentDeviceClaim: Hashable {
     let created: Date
     let updated: Date
 
-    /// "punchbowl-mobile"
+    /// "weather-app"
     var project: String { URL(fileURLWithPath: workspace).lastPathComponent }
 
     /// Reads a claim file. Claims a single command holds while it runs are skipped: they end
@@ -224,7 +210,7 @@ enum ClaimState: Equatable {
 
 /// Text for the user and the agents about a claim.
 enum ClaimText {
-    /// "punchbowl-mobile · last command 58 min ago · its agent's turn ended"
+    /// "weather-app · last command 58 min ago · its agent's turn ended"
     static func detail(_ status: ClaimStatus, owner: ClaimOwner?, state: ClaimState, now: Date) -> String {
         var parts = [status.claim.project, "last command \(Format.age(since: status.lastActivity, now: now)) ago"]
         if let owner, owner.ended == nil, owner.turnEnded == nil {

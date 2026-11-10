@@ -23,13 +23,35 @@ struct DevServer: Identifiable, Hashable {
     struct Project: Hashable {
         let name: String
         let subtitle: String
+        /// The git worktree it's in, when it isn't the main checkout.
+        var worktree: String? = nil
+
+        /// The same checkout: the same repo and worktree (any folder inside it).
+        func isSameCheckout(as other: Project) -> Bool { name == other.name && worktree == other.worktree }
     }
 
     struct Metro: Hashable {
         let running: Bool
         /// The port that answered as Metro, used to talk to its `/message` socket.
         let port: Int
-        let apps: [String]
+        /// The apps attached to it, as they introduce themselves at `/json/list`.
+        var targets: [Target] = []
+        /// Simulator UDID → app, for simulator apps connected to it (they run on this Mac).
+        var simulators: [String: String] = [:]
+
+        /// Device names of the attached apps, e.g. "iPhone 17 Pro".
+        var apps: [String] {
+            var names: [String] = []
+            for target in targets where !names.contains(target.deviceName) { names.append(target.deviceName) }
+            return names
+        }
+
+        struct Target: Hashable {
+            /// "iPhone 17 Pro", a phone's name, or an Android model ("sdk_gphone64_arm64").
+            let deviceName: String
+            /// The app's title or bundle id.
+            let app: String?
+        }
     }
 }
 
@@ -56,7 +78,7 @@ enum ServerScanner {
 
     static func scan() async -> [DevServer] {
         let listening = listeningPorts()
-        let table = processTable()
+        let table = recentProcessTable()
         let candidates = listening.keys.compactMap { pid -> ProcessRow? in
             guard let row = table[pid],
                   isRuntime(row.executable),
@@ -98,6 +120,14 @@ enum ServerScanner {
                 if !kind.hasPrefix("Metro") { server.kind = "Metro" }
             }
             servers.append(server)
+        }
+        let metroPorts = Set(servers.compactMap(\.metro?.port))
+        if !metroPorts.isEmpty {
+            let simulators = simulatorClients(of: metroPorts, table: table)
+            for index in servers.indices {
+                guard let port = servers[index].metro?.port else { continue }
+                servers[index].metro?.simulators = simulators[port] ?? [:]
+            }
         }
         return servers.sorted { ($0.started ?? .distantPast) < ($1.started ?? .distantPast) }
     }
@@ -164,7 +194,7 @@ enum ServerScanner {
                 }
                 let subtitle = [sub.isEmpty ? nil : sub, worktree.map { "worktree \($0)" }]
                     .compactMap { $0 }.joined(separator: " · ")
-                return .init(name: name, subtitle: subtitle)
+                return .init(name: name, subtitle: subtitle, worktree: worktree)
             }
             dir.deleteLastPathComponent()
         }
@@ -178,15 +208,17 @@ enum ServerScanner {
             guard let status = await get("http://127.0.0.1:\(port)/status"),
                   String(decoding: status, as: UTF8.self).contains("packager-status")
             else { continue }
-            var apps: [String] = []
+            var targets: [DevServer.Metro.Target] = []
             if let list = await get("http://127.0.0.1:\(port)/json/list"),
-               let targets = try? JSONSerialization.jsonObject(with: list) as? [[String: Any]] {
-                for target in targets {
-                    let name = target["deviceName"] as? String ?? target["title"] as? String ?? "App"
-                    if !apps.contains(name) { apps.append(name) }
+               let entries = try? JSONSerialization.jsonObject(with: list) as? [[String: Any]] {
+                for entry in entries {
+                    let target = DevServer.Metro.Target(
+                        deviceName: entry["deviceName"] as? String ?? entry["title"] as? String ?? "App",
+                        app: entry["appId"] as? String ?? entry["description"] as? String ?? entry["title"] as? String)
+                    if !targets.contains(target) { targets.append(target) }
                 }
             }
-            return .init(running: true, port: port, apps: apps)
+            return .init(running: true, port: port, targets: targets)
         }
         return nil
     }
@@ -240,6 +272,44 @@ enum ServerScanner {
         return versions
     }
 
+    /// Metro port → the simulators whose apps are connected to it, with the app's name.
+    /// A simulator app is a process on this Mac whose executable lives in its device's folder.
+    static func simulatorClients(of ports: Set<Int>, table: [Int32: ProcessRow]) -> [Int: [String: String]] {
+        var result: [Int: [String: String]] = [:]
+        for (pid, connected) in connections(to: ports) {
+            guard let command = table[pid]?.command, let (udid, app) = simulatorApp(command) else { continue }
+            for port in connected { result[port, default: [:]][udid] = app }
+        }
+        return result
+    }
+
+    /// ".../CoreSimulator/Devices/<UDID>/data/Containers/Bundle/Application/<id>/Maps.app/Maps"
+    /// → (UDID, "Maps")
+    static func simulatorApp(_ command: String) -> (String, String)? {
+        guard let match = command.firstMatch(of: #/CoreSimulator/Devices/([0-9A-Fa-f-]{36})/.*?/([^/]+)\.app//#)
+        else { return nil }
+        return (String(match.1), String(match.2))
+    }
+
+    /// pid → the given local ports it has an open TCP connection to.
+    static func connections(to ports: Set<Int>) -> [Int32: Set<Int>] {
+        let result = Shell.runSync("lsof", ["-nP", "-iTCP", "-sTCP:ESTABLISHED", "-Fpn"])
+        var connections: [Int32: Set<Int>] = [:]
+        var pid: Int32 = 0
+        for line in result.output.split(separator: "\n") {
+            if line.hasPrefix("p") {
+                pid = Int32(line.dropFirst()) ?? 0
+            } else if line.hasPrefix("n"), let arrow = line.range(of: "->") {
+                let remote = line[arrow.upperBound...]
+                let local = remote.hasPrefix("127.0.0.1:") || remote.hasPrefix("[::1]:") || remote.hasPrefix("localhost:")
+                if local, let port = remote.split(separator: ":").last.flatMap({ Int($0) }), ports.contains(port) {
+                    connections[pid, default: []].insert(port)
+                }
+            }
+        }
+        return connections
+    }
+
     // MARK: - Process data
 
     /// pid → listening ports, from `lsof`.
@@ -257,7 +327,21 @@ enum ServerScanner {
         return ports
     }
 
-    /// Every process with its parent, start time and full command line.
+    private static let cacheLock = NSLock()
+    nonisolated(unsafe) private static var cached: (taken: Date, table: [Int32: ProcessRow])?
+
+    /// The process list for scans that run every few seconds (dev servers, builds), read
+    /// once for all of them: a table taken in the last `maxAge` seconds is reused.
+    static func recentProcessTable(maxAge: TimeInterval = 4) -> [Int32: ProcessRow] {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        if let cached, Date.now.timeIntervalSince(cached.taken) < maxAge { return cached.table }
+        let table = processTable()
+        cached = (.now, table)
+        return table
+    }
+
+    /// Every process with its parent, start time and full command line, read now.
     static func processTable() -> [Int32: ProcessRow] {
         let result = Shell.runSync("ps", ["-A", "-ww", "-o", "pid=,ppid=,lstart=,command="])
         let formatter = DateFormatter()

@@ -42,7 +42,7 @@ struct LeaseBook {
     }
 
     struct Lease: Identifiable, Hashable {
-        let deviceID: String
+        var deviceID: String
         let holder: Holder
         let since: Date
         var lastAction: Date
@@ -59,12 +59,18 @@ struct LeaseBook {
         let id: UUID
         let session: AgentSession
         let action: String
-        let devices: [String]
-        let releases: [String]
+        var devices: [String]
+        var releases: [String]
         let since: Date
         let deadline: Date
         /// Heavy work the call starts.
         var pools: [Pool] = []
+        /// What the call does beyond the agent's own work ("shuts down every simulator"):
+        /// it waits for the user to let it through.
+        var approval: String?
+        /// A device it needs is waiting for the user ("Test iPhone is locked"): it waits
+        /// until that's sorted.
+        var needsUser: String?
 
         var touched: [String] { devices + releases }
     }
@@ -102,7 +108,7 @@ struct LeaseBook {
         case useRunning([String])
     }
 
-    enum DenyReason: Equatable { case timedOut, dismissed }
+    enum DenyReason: Equatable { case timedOut, dismissed, sessionEnded }
 
     struct Denial: Equatable {
         let waiter: UUID
@@ -183,6 +189,10 @@ struct LeaseBook {
     mutating func request(
         _ waiter: Waiter, alternatives: [String: [String]] = [:], running: [String] = [], now: Date
     ) -> Decision {
+        if waiter.approval != nil || waiter.needsUser != nil {
+            waiters.append(waiter)
+            return .wait
+        }
         // Booting another simulator while one of the same kind is running and free: use that
         // one, unless the agent asks again (it needs this particular device).
         let free = running.filter { !isBlocked($0, for: waiter.session, now: now) && !queue.contains($0) }
@@ -217,14 +227,25 @@ struct LeaseBook {
         return .wait
     }
 
+    /// Updates what waiting calls need from the user (`needs` is asked only about calls that
+    /// need something), and lets through those that need nothing any more.
+    mutating func recheckNeeds(now: Date, _ needs: (Waiter) -> String?) -> Effects {
+        for index in waiters.indices where waiters[index].needsUser != nil {
+            waiters[index].needsUser = needs(waiters[index])
+        }
+        return admitWaiters(now: now)
+    }
+
     /// The hook gave up waiting (the agent was interrupted).
     mutating func cancel(_ waiter: UUID) {
         waiters.removeAll { $0.id == waiter }
     }
 
     mutating func endSession(_ sessionID: String, now: Date) -> Effects {
-        waiters.removeAll { $0.session.id == sessionID }
         var effects = Effects()
+        // Calls still waiting get their answer, so nothing hangs on to them.
+        effects.denied = waiters.filter { $0.session.id == sessionID }.map { Denial(waiter: $0.id, reason: .sessionEnded) }
+        waiters.removeAll { $0.session.id == sessionID }
         for (device, lease) in leases where lease.holder.session?.id == sessionID {
             endAgentLease(device, now: now, effects: &effects)
         }
@@ -278,6 +299,21 @@ struct LeaseBook {
         queue.remove(device)
         if isHeldByUser(device) { leases[device] = nil }
         return admitWaiters(now: now)
+    }
+
+    /// The device is now known by another id (an emulator's serial gave way to its AVD
+    /// name): its lease, the user's place in line and waiting calls follow it.
+    mutating func rekey(_ old: String, to new: String) {
+        guard old != new else { return }
+        if var lease = leases.removeValue(forKey: old), leases[new] == nil {
+            lease.deviceID = new
+            leases[new] = lease
+        }
+        if queue.remove(old) != nil { queue.insert(new) }
+        for index in waiters.indices {
+            waiters[index].devices = waiters[index].devices.map { $0 == old ? new : $0 }
+            waiters[index].releases = waiters[index].releases.map { $0 == old ? new : $0 }
+        }
     }
 
     /// Drops whatever is known about a device, e.g. an agent lease that is clearly over.
@@ -342,13 +378,15 @@ struct LeaseBook {
 
     // MARK: Internals
 
+    /// The call runs: it takes its devices, and gives up the ones it's done with. A device
+    /// the user holds stays theirs (a call they let through doesn't end their hold).
     private mutating func apply(_ waiter: Waiter, now: Date) {
         reservations += waiter.pools.map { Reservation(pool: $0, until: now.addingTimeInterval(60)) }
-        for device in waiter.releases {
+        for device in waiter.releases where !isHeldByUser(device) {
             leases[device] = nil
             queue.remove(device)
         }
-        for device in waiter.devices {
+        for device in waiter.devices where !isHeldByUser(device) {
             if var lease = leases[device], lease.holder.session?.id == waiter.session.id {
                 lease.lastAction = now
                 lease.lastActionName = waiter.action
@@ -375,7 +413,7 @@ struct LeaseBook {
     private mutating func admitWaiters(now: Date) -> Effects {
         var effects = Effects()
         for waiter in waiters
-        where !waiter.touched.contains(where: { isBlocked($0, for: waiter.session, now: now) })
+        where waiter.approval == nil && waiter.needsUser == nil && !waiter.touched.contains(where: { isBlocked($0, for: waiter.session, now: now) })
             && !needsRoom(waiter, now: now) {
             waiters.removeAll { $0.id == waiter.id }
             apply(waiter, now: now)

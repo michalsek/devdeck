@@ -38,7 +38,7 @@ final class ClaimStore: ObservableObject {
     // MARK: Reading
 
     func claims(for device: DeviceItem) -> [ClaimStatus] {
-        claims.filter { $0.claim.deviceID == device.id || $0.claim.deviceID == device.serial }
+        claims.filter { device.matches($0.claim.deviceID) }
     }
 
     func owner(of status: ClaimStatus) -> ClaimOwner? { owners[status.claim.session] }

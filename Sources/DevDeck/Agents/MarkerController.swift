@@ -4,16 +4,18 @@ import os
 
 /// What the companion app shows on a device (see helpers/README.md).
 struct MarkerState: Codable, Equatable {
-    var state: String
+    enum Holder: String, Codable { case free, agent, user }
+
+    var state: Holder
     var holder: String?
     var host: String?
     var project: String?
     var action: String?
     var since: Int?
 
-    static let free = MarkerState(state: "free")
+    static let free = MarkerState(state: .free)
 
-    init(state: String, holder: String? = nil, host: String? = nil, project: String? = nil,
+    init(state: Holder, holder: String? = nil, host: String? = nil, project: String? = nil,
          action: String? = nil, since: Int? = nil) {
         self.state = state
         self.holder = holder
@@ -28,10 +30,10 @@ struct MarkerState: Codable, Equatable {
         switch lease.holder {
         case .agent(let session):
             self.init(
-                state: "agent", holder: session.agent.title, host: session.host,
+                state: .agent, holder: session.agent.title, host: session.host,
                 project: session.project.name, action: lease.lastActionName, since: since)
         case .user:
-            self.init(state: "user", holder: "You", since: since)
+            self.init(state: .user, holder: "You", since: since)
         }
     }
 
@@ -120,7 +122,7 @@ final class MarkerController {
             guard start || state.differs(from: sent[device.markerKey]) else { continue }
 
             working.insert(device.markerKey)
-            Self.log.info("\(device.markerKey, privacy: .public): sending \(state.state, privacy: .public)\(start ? " (start)" : "", privacy: .public)")
+            Self.log.info("\(device.markerKey, privacy: .public): sending \(state.state.rawValue, privacy: .public)\(start ? " (start)" : "", privacy: .public)")
             Task {
                 let delivered: Bool
                 switch device.kind {
@@ -129,7 +131,7 @@ final class MarkerController {
                 case .physical: delivered = false
                 }
                 working.remove(device.markerKey)
-                Self.log.info("\(device.markerKey, privacy: .public): \(state.state, privacy: .public) \(delivered ? "delivered" : "failed", privacy: .public)")
+                Self.log.info("\(device.markerKey, privacy: .public): \(state.state.rawValue, privacy: .public) \(delivered ? "delivered" : "failed", privacy: .public)")
                 if delivered {
                     sent[device.markerKey] = state
                     if start { pendingStart.remove(device.markerKey) }

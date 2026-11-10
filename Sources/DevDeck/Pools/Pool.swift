@@ -1,3 +1,4 @@
+import DevDeckProtocol
 import Foundation
 
 /// Kinds of heavy work that share the Mac. Each has a limit; agents wait for room.
@@ -44,26 +45,15 @@ enum Pool: String, CaseIterable, Identifiable, Hashable {
         return []
     }
 
-    /// Pools a shell command needs: builds, dev servers and device boots. Best effort,
-    /// like `HookEvent.shellCommand`: each `;`, `&&`, `|` or newline separated part on its own.
+    /// Pools a shell command needs: builds, dev servers and device boots.
     static func forShell(_ command: String) -> [Pool] {
         var pools: [Pool] = []
-        for part in command.components(separatedBy: CharacterSet(charactersIn: ";|&\n")) {
-            var words = part.split(whereSeparator: \.isWhitespace)
-                .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "\"'()")) }
-            while let first = words.first, first.contains("="), !first.hasPrefix("-") { words.removeFirst() }
-            // Runners that just start the next word: npx expo …, bunx vite, pnpm exec …
-            while let first = words.first, ["npx", "bunx", "exec", "time", "nice", "caffeinate"].contains(first)
-                || (first == "pnpm" && words.dropFirst().first == "exec") {
-                words.removeFirst()
+        for invocation in ShellCommand.invocations(command) {
+            if let pool = pool(program: invocation.program, args: invocation.args), !pools.contains(pool) {
+                pools.append(pool)
             }
-            guard let program = words.first.map({ $0.split(separator: "/").last.map(String.init) ?? $0 }) else { continue }
-            let args = Array(words.dropFirst())
-            if let pool = pool(program: program, args: args) { pools.append(pool) }
         }
-        var unique: [Pool] = []
-        for pool in pools where !unique.contains(pool) { unique.append(pool) }
-        return unique
+        return pools
     }
 
     private static let devScripts: Set<String> = ["start", "dev", "web", "serve"]
@@ -109,8 +99,6 @@ enum Pool: String, CaseIterable, Identifiable, Hashable {
             return args.first == "dev" ? .devServer : nil
         case "start-storybook", "metro":
             return .devServer
-        case "xcrun":
-            return args.first == "simctl" && args.dropFirst().first == "boot" ? .iosSimulator : nil
         case "simctl":
             return args.first == "boot" ? .iosSimulator : nil
         case "emulator":

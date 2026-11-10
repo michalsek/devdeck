@@ -205,4 +205,55 @@ final class LeaseBookTests: XCTestCase {
         book.cancel(waiting.id)
         XCTAssertTrue(book.release("sim", now: start + 1).allowed.isEmpty)
     }
+
+    func testLeaseFollowsAnEmulatorFromItsSerialToItsAVDName() {
+        var book = LeaseBook()
+        _ = book.request(call(claude, "emulator-5554"), now: start)
+        let waiting = call(codex, "emulator-5554", at: 5)
+        XCTAssertEqual(book.request(waiting, now: start + 5), .wait)
+        book.joinQueue("emulator-5554", now: start + 6)
+
+        book.rekey("emulator-5554", to: "avd:Pixel_9")
+        XCTAssertNil(book.leases["emulator-5554"])
+        XCTAssertEqual(book.leases["avd:Pixel_9"]?.deviceID, "avd:Pixel_9")
+        XCTAssertEqual(book.queue, ["avd:Pixel_9"])
+        XCTAssertEqual(book.waiters(for: "avd:Pixel_9").map(\.id), [waiting.id])
+    }
+
+    func testACallThatAffectsEveryoneWaitsForTheUser() {
+        var book = LeaseBook()
+        var killall = call(claude, "sim")
+        killall.approval = "quits the Simulator app"
+        XCTAssertEqual(book.request(killall, now: start), .wait)
+        XCTAssertTrue(tick(&book, at: 60).allowed.isEmpty)
+        XCTAssertEqual(book.forceAllow(killall.id, now: start + 61).allowed, [killall.id])
+    }
+
+    func testACallForALockedPhoneWaitsUntilItIsUnlocked() {
+        var book = LeaseBook()
+        var launch = call(claude, "phone")
+        launch.needsUser = "Test iPhone is locked"
+        XCTAssertEqual(book.request(launch, now: start), .wait)
+        XCTAssertTrue(book.recheckNeeds(now: start + 5) { _ in "Test iPhone is locked" }.allowed.isEmpty)
+        XCTAssertEqual(book.recheckNeeds(now: start + 10) { _ in nil }.allowed, [launch.id])
+        XCTAssertEqual(book.leases["phone"]?.holder, .agent(claude))
+    }
+
+    func testLettingACallThroughKeepsTheUsersHold() {
+        var book = LeaseBook()
+        book.hold("sim", now: start)
+        let waiting = call(claude, "sim", at: 5)
+        XCTAssertEqual(book.request(waiting, now: start + 5), .wait)
+        XCTAssertEqual(book.forceAllow(waiting.id, now: start + 6).allowed, [waiting.id])
+        XCTAssertTrue(book.isHeldByUser("sim"))
+    }
+
+    func testEndingASessionAnswersItsWaitingCalls() {
+        var book = LeaseBook()
+        book.hold("sim", now: start)
+        let waiting = call(claude, "sim", at: 5)
+        _ = book.request(waiting, now: start + 5)
+        XCTAssertEqual(book.endSession(claude.id, now: start + 6).denied, [.init(waiter: waiting.id, reason: .sessionEnded)])
+        XCTAssertTrue(book.waiters.isEmpty)
+    }
 }

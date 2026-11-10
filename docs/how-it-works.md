@@ -29,7 +29,7 @@ Codex, `~/.codex/hooks.json`):
 | Hook | When | What it does |
 |---|---|---|
 | `PreToolUse` (argent tools and `Bash`) | before each call | asks DevDeck whether the call may run, and waits for the answer |
-| `PostToolUse`, `PostToolUseFailure` (`Bash`) | after a shell command | if agent-device answered `DEVICE_IN_USE`, adds what DevDeck knows about the device's holder (see agent-device claims) |
+| `PostToolUse`, `PostToolUseFailure` (`Bash`) | after a shell command | if agent-device answered `DEVICE_IN_USE`, adds what DevDeck knows about the device's holder (see agent-device claims); after a device build, install or launch, reports how it went |
 | `Stop` | the agent's turn ended | lets queued users and waiting agents take its devices |
 | `SessionEnd` | the session ended | ends its leases |
 
@@ -37,9 +37,12 @@ Codex has no `PostToolUseFailure`; its `PostToolUse` covers failed commands too.
 
 The hooks run `devdeck-hook`, a small helper inside the app, which talks to DevDeck over
 a socket in `~/Library/Application Support/DevDeck`. Only argent tool calls, shell
-commands that mention `simctl`, `adb`, `emulator`, `agent-device`, a build tool or a dev
-server, and command output with a `DEVICE_IN_USE` error reach DevDeck (only the error,
-not the rest of the output); anything else returns at once. If DevDeck isn't running, or crashes, the helper
+commands that run `simctl`, `devicectl`, `adb`, `emulator`, `agent-device`, a build tool,
+a dev server or a `kill`, and the output of `DEVICE_IN_USE` errors and device builds
+(only its last lines) reach DevDeck; anything else returns at once. Commands are read the
+way a shell would split them: text in quotes, comments and heredocs isn't a command.
+The helper also sends the agent's process id, to tell which processes it started, and
+its `PATH`, to start Metro the way the agent would. If DevDeck isn't running, or crashes, the helper
 lets every call through. DevDeck rewrites the hooks when it's updated or moved, and
 leaves the rest of the settings file as it is.
 
@@ -100,6 +103,69 @@ does. A thread that finishes without closing its device keeps it until someone d
   agrees. Free devices of the same kind are named either way. A stale claim also posts a
   notification with **Release Claim**.
 
+## Agents
+
+Each agent session that reaches DevDeck is listed on the **Agents** page, from its first
+call until an hour after it ends.
+
+- **Working, idle, ended.** A session is idle once its turn has been over for 30 minutes,
+  and ended when it sends `SessionEnd` or its process is gone.
+- **What it started.** Every few seconds DevDeck walks the agent's process tree for dev
+  servers, native builds and Android emulators. They stay the session's after their
+  parent shell exits. Simulators and emulators it boots count too, once the boot runs.
+  Gradle and Kotlin daemons serve every build, so they're nobody's leftovers: stop idle
+  ones on the Resources page. A new session in the same agent process (after `/clear`)
+  carries on with what the previous one started.
+- **Clean Up.** When a session ends with things still running, a notification lists them
+  with **Clean Up**, which stops its processes and shuts down the devices it booted that
+  nobody else holds, drives or has claimed. Nothing is stopped without your click.
+
+## Guardrails
+
+- **Commands that affect everyone** wait for your OK (**Let Through** or **Turn Away**,
+  in a notification or on the Leases page; letting one through doesn't end your holds): `killall` / `pkill` of simulators, emulators,
+  Node, Java, `xcodebuild` or adb; `simctl shutdown all` / `erase all`; `adb kill-server`;
+  restarting CoreSimulator; argent's `stop-all-simulator-servers` without a device list.
+- **Stopping someone else's server.** `kill <pid>`, `kill $(lsof -ti:<port>)`,
+  `kill-port` and `fuser -k` aimed at a dev server or build another session (or you)
+  started wait for your OK too.
+- **Android on a phone.** With General → Android testing set to only physical phones,
+  an agent that starts or drives an emulator is turned away and told to use the
+  connected phone, or you're asked to connect one.
+- **Phones that need you.** A call for a phone that's locked, doesn't trust the Mac,
+  doesn't allow USB debugging yet or is offline waits until that's sorted, and you're
+  told. A locked phone only holds calls that need it awake: installs and builds go ahead.
+- **The wrong Metro.** The first time an agent acts on a device whose app loads another
+  checkout's Metro, the call is turned away with how to point the app at the right one;
+  asking again goes through. You're told too.
+
+## Metro
+
+**Run agents' Metro servers in DevDeck** (Dev Servers, on by default): when an agent runs
+`expo start`, `react-native start` or a package script that does (`npm start`,
+`yarn dev`), on its own or after a `cd`, DevDeck starts that command itself in the same
+folder, with the agent's `PATH`, in its own session (so quitting DevDeck doesn't stop it),
+and logs to `~/Library/Logs/DevDeck` in place of the command's own redirections. A
+command that sets something up first (`export …`, `nvm use`, `source .env`) runs as the
+agent wrote it, and so does one whose Metro exits right away. The agent is told the port and the log,
+and doesn't start it again. Metro keeps running when the agent's shell or background
+task ends, until you stop it, restart it from its menu, or clean up after the agent.
+If the port belongs to another project's server, DevDeck picks the next free one and
+tells the agent how to point the app at it. If Metro is already running in that folder,
+the agent is pointed at it instead. An agent may stop the Metro DevDeck runs for it. Metro isn't started while dev servers are
+over their limit or the Mac is short on memory; the call waits like any other.
+
+Under each running device, DevDeck shows which Metro its app loads: for a simulator from
+the app's connection to Metro, for an emulator from its `adb reverse` rules, otherwise
+from the name the app gives Metro.
+
+## Activity
+
+The **Activity** page lists what DevDeck decided: calls that waited (and why), turned
+away, sent to another device or held for your OK, what you did, released claims,
+cleanups and Metro events. It's kept for a week in
+`~/Library/Application Support/DevDeck/activity.jsonl`.
+
 ## Notifications
 
 When an agent's call has waited a few seconds, DevDeck posts a notification: which agent,
@@ -122,8 +188,10 @@ Heavy work an agent starts waits for room. Each kind has a limit, set on the
 | Native builds | 1 | `xcodebuild`, Gradle builds, `expo run`, `react-native run-*`, `npm run ios`/`android`, local EAS builds |
 | Dev servers | 3 | `expo start`, `npm`/`yarn`/`pnpm`/`bun` `start`/`dev`, Vite, Next.js, Storybook, Metro |
 
-While free memory is below 15% (or macOS reports critical memory pressure), nothing heavy
-starts.
+While free memory is below 15% (or macOS reports critical memory pressure), or the Mac
+moves more than 16 MB a second in and out of swap for 30 seconds, nothing heavy starts.
+How much is swapped out isn't a good sign on its own: pages stay there long after the
+pressure is gone.
 DevDeck counts what's actually running, your own work included, but only agents are
 held back. A call that gets through reserves its room for a minute, until its process
 shows up. **Run Now** on the Resources page lets a waiting call start anyway.

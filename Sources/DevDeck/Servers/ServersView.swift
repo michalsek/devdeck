@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ServersView: View {
     @EnvironmentObject private var store: ServerStore
+    @EnvironmentObject private var keeper: MetroKeeper
     @State private var details: DevServer?
 
     var body: some View {
@@ -25,12 +26,19 @@ struct ServersView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            Section {
+                Toggle(isOn: $keeper.enabled) {
+                    Text("Run agents' Metro servers in DevDeck")
+                    Text("When an agent starts Metro, DevDeck runs it instead, so it keeps running when the agent's shell or background task ends. The agent is told the port and where the log is; if the port is taken, DevDeck picks a free one.")
+                }
+            }
             if store.lastError != nil {
                 Section { ErrorRow(errors: [store.lastError]) }
             }
         }
         .formStyle(.grouped)
         .sheet(item: $details) { ServerDetails(snapshot: $0) }
+        .onAppear { keeper.prune() }
     }
 }
 
@@ -58,6 +66,7 @@ extension DevServer {
 
 struct ServerRow: View {
     @EnvironmentObject private var store: ServerStore
+    @EnvironmentObject private var keeper: MetroKeeper
     let server: DevServer
     let showDetails: (DevServer) -> Void
 
@@ -72,6 +81,12 @@ struct ServerRow: View {
                     }
                 }
                 Text(server.summary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                if let kept = keeper.kept(for: server) {
+                    Label("Kept running by DevDeck\(kept.agent.map { " for \($0)" } ?? "")", systemImage: "lifepreserver")
+                        .font(.caption)
+                        .foregroundStyle(.purple)
+                        .lineLimit(1)
+                }
             }
             Spacer(minLength: 8)
             if server.metro != nil { ReloadButton(server: server) }
@@ -91,6 +106,11 @@ struct ServerRow: View {
                 Button("Open in Terminal") { store.openTerminal(server) }
             }
             Button("Copy Command") { Pasteboard.copy(server.command) }
+            if let kept = keeper.kept(for: server) {
+                Divider()
+                Button("Show Log") { NSWorkspace.shared.open(URL(fileURLWithPath: kept.log)) }
+                Button("Restart") { keeper.restart(kept) }
+            }
             Divider()
             Button("Details…") { showDetails(server) }
         }
@@ -117,6 +137,7 @@ struct ReloadButton: View {
 /// Everything known about one server, in a sheet like System Settings' "Details…".
 struct ServerDetails: View {
     @EnvironmentObject private var store: ServerStore
+    @EnvironmentObject private var devices: DeviceStore
     @Environment(\.dismiss) private var dismiss
     let snapshot: DevServer
 
@@ -147,8 +168,8 @@ struct ServerDetails: View {
                             LabeledContent("Started", value: started.formatted(date: .abbreviated, time: .shortened))
                         }
                         LabeledContent("PID", value: String(server.pid))
-                        if let apps = server.metro?.apps {
-                            LabeledContent("Connected apps", value: apps.isEmpty ? "None" : apps.joined(separator: "\n"))
+                        if let metro = server.metro {
+                            LabeledContent("Connected apps", value: connectedApps(metro))
                         }
                     }
                     if let cwd = server.cwd {
@@ -187,5 +208,14 @@ struct ServerDetails: View {
             .padding([.horizontal, .bottom], 20)
         }
         .frame(width: 500, height: 560)
+    }
+
+    /// "Weather on iPhone 17 Pro", one per line.
+    private func connectedApps(_ metro: DevServer.Metro) -> String {
+        var lines = metro.simulators.map { udid, app in "\(app) on \(devices.index.name(of: udid))" }.sorted()
+        for target in metro.targets where !lines.contains(where: { $0.hasSuffix(" on " + target.deviceName) }) {
+            lines.append(target.app.map { "\($0) on \(target.deviceName)" } ?? target.deviceName)
+        }
+        return lines.isEmpty ? "None" : lines.joined(separator: "\n")
     }
 }

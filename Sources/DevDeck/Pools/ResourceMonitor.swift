@@ -13,6 +13,8 @@ final class ResourceMonitor: ObservableObject {
         var pressure = 1
         var swapUsed: UInt64 = 0
         var swapTotal: UInt64 = 0
+        /// Bytes moved in and out of swap since the Mac started; nil if it couldn't be read.
+        var swapTraffic: UInt64?
         var load: Double = 0
         var cores = ProcessInfo.processInfo.activeProcessorCount
         var thermal = ProcessInfo.ThermalState.nominal
@@ -54,6 +56,18 @@ final class ResourceMonitor: ObservableObject {
     @Published var minFreeMemory: Int {
         didSet { UserDefaults.standard.set(minFreeMemory, forKey: "minFreeMemory") }
     }
+    /// Start no heavy work while the Mac is swapping hard. macOS can report normal memory
+    /// pressure while it moves pages in and out of swap all the time, and everything crawls.
+    /// How much is swapped out says little: pages stay there long after the pressure is gone.
+    @Published var holdWhileSwapping: Bool {
+        didSet { UserDefaults.standard.set(holdWhileSwapping, forKey: "holdWhileSwapping") }
+    }
+    /// Swap traffic (in and out) that counts as swapping hard, in bytes a second, averaged
+    /// over `swapWindow`.
+    static let swapLimit: Double = 16 * 1_048_576
+    static let swapWindow: TimeInterval = 30
+    /// Swap-ins plus swap-outs so far, in bytes, with when they were read.
+    private var swapSamples: [(date: Date, bytes: UInt64)] = []
     /// Run native builds at background priority while the user is at the Mac.
     @Published var backgroundBuilds: Bool {
         didSet {
@@ -72,6 +86,7 @@ final class ResourceMonitor: ObservableObject {
         let stored = UserDefaults.standard.dictionary(forKey: "poolLimits") as? [String: Int] ?? [:]
         limits = Dictionary(uniqueKeysWithValues: Pool.allCases.map { ($0, stored[$0.rawValue] ?? $0.defaultLimit) })
         minFreeMemory = UserDefaults.standard.object(forKey: "minFreeMemory") as? Int ?? 15
+        holdWhileSwapping = UserDefaults.standard.object(forKey: "holdWhileSwapping") as? Bool ?? true
         backgroundBuilds = UserDefaults.standard.bool(forKey: "backgroundBuilds")
         if Demo.isOn {
             snapshot = Demo.snapshot
@@ -86,9 +101,26 @@ final class ResourceMonitor: ObservableObject {
         }
     }
 
-    /// macOS reports "warning" pressure often while plenty is still free, so only critical
-    /// pressure counts on its own.
-    var memoryLow: Bool { minFreeMemory > 0 && (snapshot.memoryFree < minFreeMemory || snapshot.pressure >= 4) }
+    var memoryLow: Bool { memoryProblem != nil }
+
+    /// Why nothing heavy should start now: "memory is low (12% free)" or "the Mac is swapping
+    /// hard (40 MB/s)". macOS reports "warning" pressure often while plenty is still free, so
+    /// only critical pressure counts on its own.
+    var memoryProblem: String? {
+        if minFreeMemory > 0, snapshot.memoryFree < minFreeMemory || snapshot.pressure >= 4 {
+            return "memory is low (\(snapshot.memoryFree)% free)"
+        }
+        if holdWhileSwapping, swapRate > Self.swapLimit {
+            return String(format: "the Mac is swapping hard (%.0f MB/s)", swapRate / 1_048_576)
+        }
+        return nil
+    }
+
+    /// Bytes a second moved in and out of swap, over the last `swapWindow`.
+    var swapRate: Double {
+        guard let first = swapSamples.first, let last = swapSamples.last, last.date > first.date else { return 0 }
+        return Double(last.bytes &- first.bytes) / last.date.timeIntervalSince(first.date)
+    }
 
     func refresh() async {
         guard !scanning else { return }
@@ -96,6 +128,9 @@ final class ResourceMonitor: ObservableObject {
         defer { scanning = false }
         let scan = await Task.detached(priority: .utility) { Self.scan() }.value
         snapshot = scan.snapshot
+        let now = Date.now
+        if let traffic = scan.snapshot.swapTraffic { swapSamples.append((now, traffic)) }
+        swapSamples.removeAll { now.timeIntervalSince($0.date) > Self.swapWindow }
         builds = scan.builds
         idleDaemons = scan.idleDaemons
         table = scan.table
@@ -114,12 +149,15 @@ final class ResourceMonitor: ObservableObject {
 
     // MARK: - Priority
 
-    /// While the user is at the Mac (input in the last 2 minutes), builds and the Gradle
+    /// The user counts as at the Mac this long after their last input.
+    static let activeWindow: TimeInterval = 120
+
+    /// While the user is at the Mac (input in the last `activeWindow`), builds and the Gradle
     /// daemons doing their work run at background priority: efficiency cores, throttled I/O.
     /// Slower builds, a smooth Mac. Restored when the user is away or the option is off.
     private func updatePriorities() async {
         guard !Demo.isOn else { return }
-        let active = LeaseStore.secondsSinceUserInput() < 120
+        let active = UserActivity.secondsSinceInput() < Self.activeWindow
         var wanted: Set<Int32> = []
         if backgroundBuilds && active && !builds.isEmpty {
             var children: [Int32: [Int32]] = [:]
@@ -150,13 +188,11 @@ final class ResourceMonitor: ObservableObject {
     }
 
     private nonisolated static func scan() -> Scan {
-        let table = ServerScanner.processTable()
+        let table = ServerScanner.recentProcessTable()
         let builds = buildJobs(in: table)
         let gradleBuilding = builds.contains { $0.kind == "Gradle build" }
         let daemons = gradleBuilding ? [] : table.values.compactMap { row -> Daemon? in
-            let kind = isGradleDaemon(row.command) ? "Gradle daemon"
-                : row.command.contains("KotlinCompileDaemon") || row.command.contains("kotlin-daemon") ? "Kotlin daemon" : nil
-            return kind.map { Daemon(pid: row.pid, kind: $0, footprint: footprint(row.pid)) }
+            return daemonKind(row.command).map { Daemon(pid: row.pid, kind: $0, footprint: footprint(row.pid)) }
         }.sorted { $0.footprint > $1.footprint }
         return Scan(snapshot: snapshot(), builds: builds, idleDaemons: daemons, table: table)
     }
@@ -197,6 +233,13 @@ final class ResourceMonitor: ObservableObject {
         return nil
     }
 
+    /// "Gradle daemon" or "Kotlin daemon": build daemons that stay between builds.
+    nonisolated static func daemonKind(_ command: String) -> String? {
+        if isGradleDaemon(command) { return "Gradle daemon" }
+        if command.contains("KotlinCompileDaemon") || command.contains("kotlin-daemon") { return "Kotlin daemon" }
+        return nil
+    }
+
     nonisolated static func isGradleDaemon(_ command: String) -> Bool {
         command.contains("org.gradle.launcher.daemon.bootstrap.GradleDaemon")
     }
@@ -219,6 +262,16 @@ final class ResourceMonitor: ObservableObject {
         if sysctlbyname("vm.swapusage", &swap, &size, nil, 0) == 0 {
             snapshot.swapUsed = swap.xsu_used
             snapshot.swapTotal = swap.xsu_total
+        }
+        var stats = vm_statistics64()
+        var count = mach_msg_type_number_t(MemoryLayout<vm_statistics64>.size / MemoryLayout<integer_t>.size)
+        let read = withUnsafeMutablePointer(to: &stats) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                host_statistics64(mach_host_self(), HOST_VM_INFO64, $0, &count)
+            }
+        }
+        if read == KERN_SUCCESS {
+            snapshot.swapTraffic = (stats.swapins &+ stats.swapouts) &* UInt64(vm_kernel_page_size)
         }
         var loads = [Double](repeating: 0, count: 3)
         if getloadavg(&loads, 3) > 0 { snapshot.load = loads[0] }

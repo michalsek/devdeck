@@ -1,5 +1,38 @@
 import Foundation
 
+/// Why a physical device can't be used right now, and what the user can do about it.
+enum DeviceProblem: Hashable {
+    case locked, untrusted, unauthorized, offline
+
+    /// "is locked"
+    var text: String {
+        switch self {
+        case .locked: "is locked"
+        case .untrusted: "doesn't trust this Mac yet"
+        case .unauthorized: "doesn't allow USB debugging from this Mac yet"
+        case .offline: "is offline"
+        }
+    }
+
+    /// "Unlock it."
+    var fix: String {
+        switch self {
+        case .locked: "Unlock it."
+        case .untrusted: "Unlock it and tap Trust."
+        case .unauthorized: "Unlock it and allow USB debugging in the prompt."
+        case .offline: "Unplug it and plug it back in."
+        }
+    }
+
+    /// A locked phone still takes installs and builds; nothing works while it isn't trusted.
+    var blocksEverything: Bool { self != .locked }
+
+    /// What a call for the device waits for: "Test iPhone is locked: unlock it"
+    func waiting(for device: String) -> String {
+        "\(device) \(text): \(fix.prefix(1).lowercased())\(fix.dropFirst().dropLast())"
+    }
+}
+
 struct DeviceItem: Identifiable, Hashable {
     enum Kind: Hashable { case simulator, emulator, physical }
     enum Platform: String, Hashable { case ios = "iOS", android = "Android" }
@@ -17,11 +50,25 @@ struct DeviceItem: Identifiable, Hashable {
     /// adb serial for Android devices, AVD name for emulators.
     var serial: String?
     var avdName: String?
+    /// Android: the model, as apps report it to Metro ("sdk_gphone64_arm64", "Pixel 8").
+    var model: String?
+    /// Android: host ports the device's `adb reverse` rules lead to (e.g. Metro's).
+    var reversePorts: [Int] = []
+    /// Physical devices: other names tools use for it (CoreDevice identifier, serial number, ECID, its name).
+    var aliases: [String] = []
+    /// Physical devices: what keeps agents from using it until the user steps in, e.g.
+    /// "is locked" or "doesn't allow USB debugging yet".
+    var problem: DeviceProblem?
 
-    var shortID: String { String(id.replacingOccurrences(of: "avd:", with: "").prefix(8)) }
+    var shortID: String { String(id.replacingOccurrences(of: Self.avdPrefix, with: "").prefix(8)) }
+
+    /// An emulator's id: "avd:<AVD name>", which stays the same across boots.
+    static func avdID(_ name: String) -> String { avdPrefix + name }
+    private static let avdPrefix = "avd:"
 
     var stateLabel: String {
         switch (kind, isRunning) {
+        case (.physical, _) where problem != nil: problem == .locked ? "Locked" : "Needs you"
         case (.physical, true): connection.map { "Connected · \($0)" } ?? "Connected"
         case (.physical, false): "Not connected"
         case (_, true): kind == .simulator ? "Booted" : "Running"
@@ -66,6 +113,8 @@ final class DeviceStore: ObservableObject {
     }
 
     var running: [DeviceItem] { devices.filter(\.isRunning) }
+
+    var index: DeviceIndex { DeviceIndex(devices: devices) }
 
     func devices(_ kind: DeviceItem.Kind) -> [DeviceItem] { devices.filter { $0.kind == kind } }
 
@@ -190,7 +239,7 @@ final class DeviceStore: ObservableObject {
               let devices = (json["result"] as? [String: Any])?["devices"] as? [[String: Any]]
         else { return [] }
 
-        return devices.compactMap { device -> DeviceItem? in
+        let items = devices.compactMap { device -> DeviceItem? in
             let hardware = device["hardwareProperties"] as? [String: Any] ?? [:]
             guard hardware["reality"] as? String == "physical" else { return nil }
             let properties = device["deviceProperties"] as? [String: Any] ?? [:]
@@ -210,8 +259,40 @@ final class DeviceStore: ObservableObject {
             }
             item.lastSeen = (connection["lastConnectionDate"] as? String)
                 .flatMap { try? Date($0, strategy: .iso8601) }
+            item.aliases = [device["identifier"] as? String, hardware["serialNumber"] as? String,
+                            (hardware["ecid"] as? NSNumber).map { $0.stringValue }, properties["name"] as? String]
+                .compactMap { $0 }
+            if connected, connection["pairingState"] as? String != "paired" {
+                item.problem = .untrusted
+            }
             return item
         }
+        // Only connected, trusted phones can say whether they're locked (about a second each).
+        return await withTaskGroup(of: DeviceItem.self) { group in
+            for item in items {
+                group.addTask {
+                    guard item.isRunning, item.problem == nil, await isLocked(item.id) else { return item }
+                    var locked = item
+                    locked.problem = .locked
+                    return locked
+                }
+            }
+            var result: [DeviceItem] = []
+            for await item in group { result.append(item) }
+            return result
+        }
+    }
+
+    /// `devicectl device info lockState`: a passcode is needed to use it now.
+    nonisolated static func isLocked(_ id: String) async -> Bool {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("devdeck-lock-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let result = await Shell.run(
+            "xcrun", ["devicectl", "device", "info", "lockState", "--device", id, "--json-output", file.path, "-q"], timeout: 10)
+        guard result.ok, let data = try? Data(contentsOf: file),
+              let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        else { return false }
+        return (json["result"] as? [String: Any])?["passcodeRequired"] as? Bool ?? false
     }
 
     nonisolated static func scanAndroid(knownAVDs: [String: String] = [:]) async -> [DeviceItem] {
@@ -231,6 +312,7 @@ final class DeviceStore: ObservableObject {
                     return pair.count == 2 ? (pair[0], pair[1]) : nil
                 }, uniquingKeysWith: { first, _ in first })
                 let model = info["model"]?.replacingOccurrences(of: "_", with: " ")
+                let reverses = state == "device" ? await reversePorts(serial) : []
 
                 if serial.hasPrefix("emulator-") {
                     // The console answers "Medium_Phone\r\nOK\r\n"; empty or slow means unknown.
@@ -242,21 +324,31 @@ final class DeviceStore: ObservableObject {
                         : knownAVDs[serial]
                     if let avd { runningAVDs.insert(avd) }
                     var item = DeviceItem(
-                        id: avd.map { "avd:\($0)" } ?? serial,
+                        id: avd.map(DeviceItem.avdID) ?? serial,
                         name: avd?.replacingOccurrences(of: "_", with: " ") ?? serial,
                         detail: [model, "Android emulator", state == "device" ? nil : state]
                             .compactMap { $0 }.joined(separator: " · "),
                         kind: .emulator, platform: .android, isRunning: true)
                     item.serial = serial
                     item.avdName = avd
+                    item.model = info["model"]
+                    item.reversePorts = reverses
                     items.append(item)
                 } else {
                     var item = DeviceItem(
                         id: serial, name: model ?? serial,
                         detail: ["Android", state == "device" ? nil : state].compactMap { $0 }.joined(separator: " · "),
                         kind: .physical, platform: .android, isRunning: state == "device")
+                    switch state {
+                    case "unauthorized": item.problem = .unauthorized
+                    case "offline": item.problem = .offline
+                    case "device": if await isLocked(serial: serial) { item.problem = .locked }
+                    default: break
+                    }
                     item.serial = serial
                     item.connection = serial.contains(":") ? "Wi-Fi" : "USB"
+                    item.model = info["model"]
+                    item.reversePorts = reverses
                     items.append(item)
                 }
             }
@@ -267,12 +359,30 @@ final class DeviceStore: ObservableObject {
             for name in avds.output.split(separator: "\n").map({ $0.trimmingCharacters(in: .whitespaces) })
             where !name.isEmpty && !name.contains(" ") && !runningAVDs.contains(name) {
                 var item = DeviceItem(
-                    id: "avd:\(name)", name: name.replacingOccurrences(of: "_", with: " "),
+                    id: DeviceItem.avdID(name), name: name.replacingOccurrences(of: "_", with: " "),
                     detail: "Android emulator", kind: .emulator, platform: .android, isRunning: false)
                 item.avdName = name
                 items.append(item)
             }
         }
         return items
+    }
+
+    /// Whether an Android phone shows its lock screen.
+    nonisolated static func isLocked(serial: String) async -> Bool {
+        let result = await Shell.run("adb", [
+            "-s", serial, "shell", "dumpsys window | grep -E 'mDreamingLockscreen=|isKeyguardShowing=|mShowingLockscreen='",
+        ], timeout: 5)
+        return result.ok && result.output.range(
+            of: #"(mDreamingLockscreen|isKeyguardShowing|mShowingLockscreen)=true"#, options: .regularExpression) != nil
+    }
+
+    /// "emulator-5554 tcp:8081 tcp:8081" lines → the host ports (the last field).
+    nonisolated static func reversePorts(_ serial: String) async -> [Int] {
+        let result = await Shell.run("adb", ["-s", serial, "reverse", "--list"], timeout: 5)
+        guard result.ok else { return [] }
+        return result.output.split(separator: "\n").compactMap { line in
+            line.split(separator: " ").last.flatMap { $0.hasPrefix("tcp:") ? Int($0.dropFirst(4)) : nil }
+        }
     }
 }

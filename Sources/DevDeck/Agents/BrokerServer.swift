@@ -1,15 +1,12 @@
 import Darwin
+import DevDeckProtocol
 import Foundation
 
 /// A Unix socket in Application Support that `devdeck-hook` talks to. Each connection
 /// carries one JSON line from the hook; for calls that wait, DevDeck answers with one JSON
 /// line when it has decided. Only the user can connect (the socket is 0600).
 final class BrokerServer: @unchecked Sendable {
-    /// Keep in sync with Sources/devdeck-hook/main.swift.
-    static var socketURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/DevDeck/broker.sock")
-    }
+    static var socketURL: URL { URL(fileURLWithPath: HookProtocol.socketPath()) }
 
     private let queue = DispatchQueue(label: "DevDeck.broker")
     private let listener: Int32
@@ -24,16 +21,9 @@ final class BrokerServer: @unchecked Sendable {
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         unlink(url.path)
 
+        guard var address = HookProtocol.address(url.path) else { return nil }
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { return nil }
-        var address = sockaddr_un()
-        address.sun_family = sa_family_t(AF_UNIX)
-        let pathBytes = Array(url.path.utf8) + [0]
-        guard pathBytes.count <= MemoryLayout.size(ofValue: address.sun_path) else {
-            close(fd)
-            return nil
-        }
-        withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: pathBytes) }
         let bound = withUnsafePointer(to: &address) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
                 bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
@@ -109,20 +99,22 @@ final class BrokerConnection: @unchecked Sendable {
         self.queue = queue
     }
 
-    /// Sends the answer line and closes the connection.
-    func respond(_ json: [String: Any]) {
-        guard var line = try? JSONSerialization.data(withJSONObject: json) else { return close() }
+    /// Answers a hook call and closes the connection.
+    func respond(_ reply: HookReply) {
+        send(reply.line)
+    }
+
+    /// Answers a script's command with any JSON value and closes the connection.
+    func respond<Value: Encodable>(json value: Value) {
+        guard var line = try? JSONEncoder().encode(value) else { return close() }
         line.append(0x0A)
+        send(line)
+    }
+
+    private func send(_ line: Data) {
         queue.async { [self] in
             guard !closed else { return }
-            line.withUnsafeBytes { buffer in
-                var offset = 0
-                while offset < buffer.count {
-                    let written = write(fd, buffer.baseAddress! + offset, buffer.count - offset)
-                    if written <= 0 { break }
-                    offset += written
-                }
-            }
+            _ = HookProtocol.writeAll(fd, line)
             closeNow()
         }
     }

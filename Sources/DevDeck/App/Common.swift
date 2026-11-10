@@ -1,6 +1,24 @@
+import CoreGraphics
 import SwiftUI
 
+enum UserActivity {
+    /// Time since the last keyboard, mouse or trackpad input anywhere on the Mac.
+    /// Needs no permission.
+    static func secondsSinceInput() -> TimeInterval {
+        CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
+    }
+}
+
 enum Format {
+    /// "30 seconds", "1 minute", "9 minutes", "2 hours", for a stretch of time in a sentence.
+    static func duration(_ seconds: TimeInterval) -> String {
+        let value = Int(seconds.rounded())
+        func unit(_ n: Int, _ name: String) -> String { "\(n) \(name)\(n == 1 ? "" : "s")" }
+        if value < 60 || value % 60 != 0 { return unit(value, "second") }
+        if value < 3600 || value % 3600 != 0 { return unit(value / 60, "minute") }
+        return unit(value / 3600, "hour")
+    }
+
     /// "45 s", "12 min", "5 h", "3 d"
     static func age(since date: Date?, now: Date = .now) -> String {
         guard let date else { return "—" }
@@ -70,5 +88,29 @@ struct ConfirmButton: View {
                 }
             }
         }
+    }
+}
+
+/// Icon, title and detail on the left, actions on the right.
+struct LineRow<Actions: View>: View {
+    let symbol: String
+    let tint: Color
+    let title: String
+    let detail: String
+    @ViewBuilder let actions: () -> Actions
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: symbol)
+                .foregroundStyle(tint)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).lineLimit(1)
+                Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            HStack(spacing: 6) { actions() }
+        }
+        .padding(.vertical, 2)
     }
 }

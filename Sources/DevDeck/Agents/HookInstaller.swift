@@ -1,3 +1,4 @@
+import DevDeckProtocol
 import Foundation
 import os
 
@@ -56,13 +57,12 @@ final class HookInstaller: ObservableObject {
         let timeout: Int
     }
 
-    /// `PreToolUse` waits for DevDeck's answer (the helper gives up after 540 s, under the
-    /// timeout). After a shell command, the helper only asks DevDeck about a `DEVICE_IN_USE`
+    /// `PreToolUse` waits for DevDeck's answer (the helper gives up before the timeout). After a shell command, the helper only asks DevDeck about a `DEVICE_IN_USE`
     /// error, and waits a few seconds at most. `Stop` and `SessionEnd` only report, in the
     /// background. Codex has no `PostToolUseFailure`; its `PostToolUse` covers failed calls.
     nonisolated static func hooks(for agent: AgentKind) -> [Hook] {
         var hooks = [
-            Hook(event: "PreToolUse", matcher: "mcp__argent__.*|Bash", async: false, timeout: 600),
+            Hook(event: "PreToolUse", matcher: "mcp__argent__.*|Bash", async: false, timeout: Int(HookProtocol.hookTimeout)),
             Hook(event: "PostToolUse", matcher: "Bash", async: false, timeout: 10),
             Hook(event: "Stop", matcher: "", async: true, timeout: 3),
             Hook(event: "SessionEnd", matcher: "", async: true, timeout: 3),

@@ -26,8 +26,13 @@ with your Mac's memory.
 - **Dev servers.** Finds Metro, Vite, Next.js and other dev servers by their listening
   ports and names them after their project. **Stop** ends the whole process tree, and
   **Reload** reloads the apps connected to Metro, like pressing `r` in its terminal.
+- **Agents.** Every agent session DevDeck has heard from: what it's doing, the devices it
+  holds or booted, and the Metros, builds and Gradle daemons it started. When a session
+  ends and leaves things running, **Clean Up** stops them.
 - **Agent activity.** See which simulator or device a Claude Code agent is driving, and
-  what it last did. The device turns purple.
+  what it last did. The device turns purple. Under each device: the Metro its app loads
+  (flagged when it isn't the agent's checkout), and how the agent's last build, install or
+  launch on it went.
 - **Device leases.** **Hold** a device, **take it over** from an agent, or **join the
   queue** for it. Agents wait for you, and for each other. An agent that finds a device
   busy, or wants to boot another simulator while one is free, is sent to the free one.
@@ -35,12 +40,20 @@ with your Mac's memory.
   sessions (T3 Code's device tools) show who holds them. A claim whose agent has finished
   is marked stale and can be released with one click, and an agent turned away with
   `DEVICE_IN_USE` is told who holds the device and whether waiting will help.
+- **Guardrails.** Commands that affect every agent (`killall Simulator`, `simctl shutdown
+  all`, `adb kill-server`) or stop another agent's server wait for your OK. Optionally,
+  agents test Android on your phone only. A call for a locked or untrusted phone waits
+  until you've unlocked it.
+- **Metro, kept running.** When an agent starts Metro, DevDeck runs it instead, so the
+  agent's background task ending doesn't take it down, and picks a free port when the
+  usual one belongs to another project.
+- **Activity.** What DevDeck decided about your agents, for the last week.
 - **Notifications.** When an agent has to wait, a notification says which one and why,
   with **Let Through** and **Turn Away** buttons. The menu bar icon counts waiting calls.
 - **On-device markers.** A small companion app shows who's driving a simulator in the
   Dynamic Island (a Live Activity), or as a silent notification on Android emulators.
 - **Resources.** Limits on booted simulators, emulators, native builds and dev servers,
-  plus a low-memory check: agents wait for room instead of grinding your Mac to a halt.
+  plus a low-memory and swap check: agents wait for room instead of grinding your Mac to a halt.
   It also stops idle Gradle and Kotlin daemons, and can run builds at background
   priority while you're at the Mac.
 - **Agent sounds.** Volume, voice packs and per-sound settings for

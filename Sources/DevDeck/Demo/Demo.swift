@@ -44,7 +44,10 @@ enum Demo {
                 pid: 41201, ports: [8081], kind: "Metro · Expo", group: .devServer, isWeb: false,
                 command: "node node_modules/.bin/expo start", cwd: "/Users/you/code/weather-app",
                 project: .init(name: "weather-app", subtitle: ""), started: started,
-                metro: .init(running: true, port: 8081, apps: ["iPhone 17 Pro"])),
+                metro: .init(
+                    running: true, port: 8081,
+                    targets: [.init(deviceName: "iPhone 17 Pro", app: "com.example.weather")],
+                    simulators: [iPhonePro: "Weather"])),
             DevServer(
                 pid: 41388, ports: [5173], kind: "Vite", group: .devServer, isWeb: true,
                 command: "node node_modules/.bin/vite", cwd: "/Users/you/code/shop-web",
@@ -120,5 +123,46 @@ enum Demo {
         snapshot.load = 6.3
         snapshot.cores = 14
         return snapshot
+    }
+
+    static var activity: [ActivityEntry] {
+        let now = Date.now
+        func entry(_ ago: TimeInterval, _ kind: ActivityEntry.Kind, _ agent: String?, _ subject: String?, _ detail: String)
+            -> ActivityEntry {
+            ActivityEntry(date: now - ago, kind: kind, agent: agent, subject: subject, detail: detail)
+        }
+        return [
+            entry(5400, .metro, "Claude Code · weather-app", "Metro · weather-app :8081",
+                  "Started Metro for the agent; it keeps running when the agent's shell ends."),
+            entry(3300, .cleanedUp, "Claude Code · maps-app", "maps-app",
+                  "Stopped what the finished session left running: Metro :8082, 2 Gradle daemons."),
+            entry(900, .redirected, "Claude Code · checkout-flow", "boot-device on iPhone 17",
+                  "iPhone 17 Pro is already running and nobody is using it, so the agent was sent there."),
+            entry(260, .user, nil, "iPhone 17", "You held it."),
+            entry(75, .ranAfterWait, "Claude Code · checkout-flow", "npx expo run:android",
+                  "Ran after waiting 40 s: 1 native build is running (limit 1)."),
+        ]
+    }
+
+    /// Three sessions: one working on the iPhone 17 Pro, one waiting for room, and one that
+    /// finished an hour ago and left a Metro and a Gradle daemon running.
+    static var agents: [String: AgentRecord] {
+        let now = Date.now
+        var working = AgentRecord(
+            session: weather, pid: 52210, firstSeen: now - 1600, lastSeen: now - 8, lastAction: "gesture-tap")
+        working.processes = [
+            OwnedProcess(pid: 41201, started: now - 10800, kind: .devServer, label: "Metro · Expo :8081", footprint: 1_400_000_000),
+        ]
+        var waiting = AgentRecord(
+            session: checkout, pid: 52388, firstSeen: now - 900, lastSeen: now - 40, lastAction: "npx expo run:android")
+        waiting.booted = [pixel]
+        var done = AgentRecord(
+            session: maps, pid: nil, firstSeen: now - 7200, lastSeen: now - 3480, lastAction: "agent-device press")
+        done.turnEnded = now - 3300
+        done.ended = now - 3000
+        done.processes = [
+            OwnedProcess(pid: 39877, started: now - 7000, kind: .devServer, label: "Metro · React Native :8082", footprint: 1_100_000_000),
+        ]
+        return Dictionary(uniqueKeysWithValues: [working, waiting, done].map { ($0.id, $0) })
     }
 }

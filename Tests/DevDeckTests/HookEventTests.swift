@@ -1,3 +1,4 @@
+import DevDeckProtocol
 import XCTest
 @testable import DevDeck
 
@@ -82,5 +83,90 @@ final class HookEventTests: XCTestCase {
         let end = HookEvent(json: ["agent": "claude", "session_id": "s1", "hook_event_name": "SessionEnd"])
         XCTAssertEqual(end?.kind, .sessionEnd)
         XCTAssertNil(HookEvent(json: ["agent": "other", "session_id": "s1", "hook_event_name": "SessionEnd"]))
+    }
+
+    func testWaiterNamesDevicesByTheirIDsAndNeedsNoRoomToBootARunningDevice() {
+        var pixel = DeviceItem(id: "avd:Pixel_9", name: "Pixel 9", detail: "", kind: .emulator, platform: .android, isRunning: true)
+        pixel.serial = "emulator-5554"
+        let devices = DeviceIndex(devices: [pixel])
+        let session = AgentSession(agent: .claude, sessionID: "s1", host: nil, project: .init(name: "app", subtitle: ""))
+        let now = Date(timeIntervalSince1970: 1_000_000)
+
+        let install = shell("adb -s emulator-5554 install app.apk")!
+        let waiter = LeaseBook.Waiter(install, session: session, claimDevices: [], devices: devices, now: now)
+        XCTAssertEqual(waiter.devices, ["avd:Pixel_9"])
+        XCTAssertEqual(waiter.deadline, now + 540)
+
+        let boot = event("mcp__argent__boot-device", ["avdName": "Pixel_9"])!
+        XCTAssertEqual(boot.pools, [.androidEmulator])
+        XCTAssertEqual(LeaseBook.Waiter(boot, session: session, claimDevices: [], devices: devices, now: now).pools, [])
+
+        // T3 Code's launcher names no device; its session's claim does.
+        let open = shell("/u/.t3/userdata/device/targets/t3-1/agent-device open app")!
+        let claimed = LeaseBook.Waiter(open, session: session, claimDevices: ["emulator-5554"], devices: devices, now: now)
+        XCTAssertEqual(claimed.devices, ["avd:Pixel_9"])
+    }
+
+    func testCommandsThatReachPastTheAgentsOwnWork() {
+        let effects: [(String, Bool)] = [
+            ("killall Simulator", true),
+            ("pkill -9 -f qemu-system", true),
+            ("pkill node", true),
+            ("xcrun simctl shutdown all", true),
+            ("xcrun simctl shutdown \(udid)", false),
+            ("adb kill-server", true),
+            ("sudo launchctl kickstart -k system/com.apple.CoreSimulator.CoreSimulatorService", true),
+            ("killall Finder", false),
+        ]
+        for (command, guarded) in effects {
+            XCTAssertEqual(CommandGuard.everyoneEffect(command) != nil, guarded, command)
+        }
+        XCTAssertNotNil(CommandGuard.everyoneEffect(argent: "stop-all-simulator-servers", [:]))
+        XCTAssertNil(CommandGuard.everyoneEffect(argent: "stop-all-simulator-servers", ["devices": [udid]]))
+
+        XCTAssertEqual(CommandGuard.kills("kill -9 4122 4123"), .init(pids: [4122, 4123]))
+        XCTAssertEqual(CommandGuard.kills("kill $(lsof -ti:8081)"), .init(ports: [8081]))
+        XCTAssertEqual(CommandGuard.kills("lsof -t -i tcp:8082 | xargs kill"), .init(ports: [8082]))
+        XCTAssertEqual(CommandGuard.kills("npx kill-port 8083"), .init(ports: [8083]))
+        XCTAssertEqual(CommandGuard.kills("lsof -i :8081"), .init())
+
+        // They reach DevDeck even though they name no device.
+        XCTAssertEqual(shell("killall Simulator")?.everyoneEffect, CommandGuard.everyoneEffect("killall Simulator"))
+        XCTAssertEqual(shell("kill $(lsof -ti:8081)")?.kills.ports, [8081])
+    }
+
+    func testPhysicalDeviceCommandsNameTheirDevice() {
+        let phone = "00008150-0011223344556677"
+        XCTAssertEqual(shell("xcrun devicectl device install app --device \(phone) App.app")?.targets, [.id(phone)])
+        XCTAssertEqual(shell("xcrun devicectl device process launch -d \(phone) com.example")?.action, "devicectl device process")
+        XCTAssertEqual(
+            shell("xcodebuild -workspace A.xcworkspace -scheme A -destination 'platform=iOS,id=\(phone)' build")?.targets,
+            [.id(phone)])
+        XCTAssertEqual(shell("npx expo run:ios --device \(phone)")?.targets, [.id(phone)])
+        XCTAssertEqual(shell("npx react-native run-android --deviceId R5CT123")?.targets, [.id("R5CT123")])
+        XCTAssertEqual(shell("xcrun devicectl list devices")?.targets ?? [], [])
+    }
+
+    func testDeviceCommandResults() {
+        let phone = "00008150-0011223344556677"
+        let failed: [String: Any] = [
+            "hook_event_name": "PostToolUseFailure", "tool_name": "Bash",
+            "tool_input": ["command": "xcrun devicectl device process launch --device \(phone) com.example"],
+            "error": "ERROR: The device is locked.",
+        ]
+        XCTAssertTrue(HookProtocol.isRelevant(failed))
+        XCTAssertEqual(HookProtocol.resultOutput(failed), "ERROR: The device is locked.")
+        var forwarded = failed
+        forwarded["agent"] = "claude"
+        forwarded["session_id"] = "s1"
+        forwarded["tool_output"] = HookProtocol.resultOutput(failed)
+        let event = HookEvent(json: forwarded)
+        XCTAssertEqual(event?.kind, .result(failed: true))
+        XCTAssertEqual(event?.targets, [.id(phone)])
+
+        XCTAssertNil(HookProtocol.resultOutput([
+            "hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": ["command": "adb devices"],
+            "tool_response": ["stdout": "List of devices attached"],
+        ]))
     }
 }

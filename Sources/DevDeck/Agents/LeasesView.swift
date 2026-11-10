@@ -1,3 +1,4 @@
+import DevDeckProtocol
 import SwiftUI
 
 /// Every device someone holds or waits for: the holder and any agent-device claim, then the
@@ -13,6 +14,29 @@ struct LeasesView: View {
             PageHeader(page: .leases)
             if claims.lastError != nil {
                 Section { ErrorRow(errors: [claims.lastError]) }
+            }
+            let asking = leases.book.waiters.filter { $0.approval != nil }
+            if !asking.isEmpty {
+                Section {
+                    ForEach(asking) { waiter in
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            LineRow(
+                                symbol: "exclamationmark.shield.fill", tint: .red, title: "\(waiter.session.label): \(waiter.action)",
+                                detail: "It \(waiter.approval ?? "") · waiting \(Format.age(since: waiter.since, now: context.date))"
+                            ) {
+                                Button("Let Through") { leases.runNow(waiter) }
+                                Button("Turn Away") { leases.dismiss(waiter) }
+                            }
+                            .help("It \(waiter.approval ?? "").")
+                        }
+                    }
+                } header: {
+                    Text("Needs Your OK")
+                } footer: {
+                    Text("Commands that affect every agent's devices or servers, or stop something another agent or you started, wait until you let them through.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             if busy.isEmpty {
                 Section {
@@ -59,7 +83,7 @@ struct LeasesView: View {
                 } header: {
                     Text("Nobody Is Using")
                 } footer: {
-                    Text("Agents keep a device while they work. Another agent's calls wait until the first agent's turn ends or it's been quiet for 2 minutes; if a free device of the same kind is running, the agent is sent there instead. Your holds and your place in line come first. A call waits up to 9 minutes before it's turned away. Devices claimed by agent-device (T3 Code's device tools) are listed too: a claim nobody has used for 10 minutes after its agent's turn ended, or for 30 minutes, is marked stale, and Release Claim closes its session.")
+                    Text(Self.rules)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -68,10 +92,17 @@ struct LeasesView: View {
         .formStyle(.grouped)
     }
 
+    private static var rules: String {
+        let lease = LeaseBook.Timing()
+        let claim = ClaimState.Timing()
+        return "Agents keep a device while they work. Another agent's calls wait until the first agent's turn ends or it's been quiet for \(Format.duration(lease.handoff)); if a free device of the same kind is running, the agent is sent there instead. Your holds and your place in line come first. A call waits up to \(Format.duration(HookProtocol.maxWait)) before it's turned away. Devices claimed by agent-device (T3 Code's device tools) are listed too: a claim nobody has used for \(Format.duration(claim.afterTurn)) after its agent's turn ended, or for \(Format.duration(claim.idle)), is marked stale, and Release Claim closes its session."
+    }
+
     /// Running devices someone holds, queues for, waits for or has claimed with agent-device.
     private var busy: [DeviceItem] {
         devices.running.filter {
-            leases.lease(for: $0) != nil || leases.isQueued(for: $0) || !leases.waiters(for: $0).isEmpty
+            leases.lease(for: $0) != nil || leases.isQueued(for: $0)
+                || leases.waiters(for: $0).contains { $0.approval == nil }
                 || !claims.claims(for: $0).isEmpty
         }
     }
@@ -164,29 +195,5 @@ private struct WaiterRow: View {
                     .help("Stop it waiting; the agent is told the device is in use")
             }
         }
-    }
-}
-
-/// Icon, title and detail on the left, actions on the right.
-private struct LineRow<Actions: View>: View {
-    let symbol: String
-    let tint: Color
-    let title: String
-    let detail: String
-    @ViewBuilder let actions: () -> Actions
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: symbol)
-                .foregroundStyle(tint)
-                .frame(width: 18)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).lineLimit(1)
-                Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            }
-            Spacer(minLength: 8)
-            HStack(spacing: 6) { actions() }
-        }
-        .padding(.vertical, 2)
     }
 }

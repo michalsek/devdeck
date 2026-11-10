@@ -1,3 +1,4 @@
+import DevDeckProtocol
 import SwiftUI
 
 /// The Mac's load, the limits for heavy work, the calls waiting for room, and idle
@@ -23,6 +24,12 @@ struct ResourcesView: View {
                     }
                 }
                 LabeledContent("Swap used", value: "\(gigabytes(monitor.snapshot.swapUsed)) of \(gigabytes(monitor.snapshot.swapTotal))")
+                LabeledContent("Swap traffic", value: String(format: "%.1f MB/s", monitor.swapRate / 1_048_576))
+                if let problem = monitor.memoryProblem {
+                    Label("Heavy work waits: \(problem).", systemImage: "hourglass")
+                        .foregroundStyle(.orange)
+                        .font(.callout)
+                }
                 LabeledContent("CPU load", value: String(format: "%.1f on %d cores", monitor.snapshot.load, monitor.snapshot.cores))
                 LabeledContent("Temperature", value: monitor.snapshot.thermal.label)
             }
@@ -42,7 +49,7 @@ struct ResourcesView: View {
             } header: {
                 Text("Limits")
             } footer: {
-                Text("An agent that boots a simulator or emulator, starts a native build or starts a dev server over its limit waits until there's room (up to 9 minutes). Your own work counts towards the limits, but is never held back.")
+                Text("An agent that boots a simulator or emulator, starts a native build or starts a dev server over its limit waits until there's room (up to \(Format.duration(HookProtocol.maxWait))). Your own work counts towards the limits, but is never held back.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -55,9 +62,13 @@ struct ResourcesView: View {
                     Text("Hold heavy work when memory is low")
                     Text("Also while macOS reports critical memory pressure")
                 }
+                Toggle(isOn: $monitor.holdWhileSwapping) {
+                    Text("Hold heavy work while the Mac is swapping hard")
+                    Text("When more than \(Int(ResourceMonitor.swapLimit / 1_048_576)) MB a second moves in and out of swap for \(Format.duration(ResourceMonitor.swapWindow)). macOS can report normal memory pressure while it does, and everything crawls.")
+                }
                 Toggle(isOn: $monitor.backgroundBuilds) {
                     Text("Run builds at background priority while you're at the Mac")
-                    Text("Native builds use the efficiency cores and slower disk access, so they take longer but the Mac stays smooth. Back to normal after 2 minutes without input.")
+                    Text("Native builds use the efficiency cores and slower disk access, so they take longer but the Mac stays smooth. Back to normal after \(Format.duration(ResourceMonitor.activeWindow)) without input.")
                 }
             } header: {
                 Text("Keeping the Mac Responsive")

@@ -7,12 +7,12 @@ final class AgentDeviceTests: XCTestCase {
     private let launcher = "/Users/me/.t3/userdata/device/targets/t3-669e258bfb303ed88328cc17/agent-device"
     private let now = Date(timeIntervalSince1970: 1_793_973_000)
     private let claude = AgentSession(
-        agent: .claude, sessionID: "a", host: "T3 Code", project: .init(name: "punchbowl-mobile", subtitle: ""))
+        agent: .claude, sessionID: "a", host: "T3 Code", project: .init(name: "weather-app", subtitle: ""))
 
     /// The claim that blocked a simulator for an hour on 2026-11-06.
     private func incidentClaim(pid: Int = 82362) -> Data {
         Data("""
-        {"schemaVersion":3,"deviceKey":"local:apple:ios:\(udid)","session":"t3-8df3016cf2a2eca76eb84e7a","workspace":"/Users/me/work/punchbowl-mobile","stateDir":"/Users/me/.t3/userdata/device/agent-device","device":{"id":"\(udid)","family":"apple","appleOs":"ios","kind":"simulator","target":"mobile","name":"iPhone 17 Pro"},"ownerPid":\(pid),"ownerStartTime":"Fri Nov  6 12:28:12 2026","ownerToken":"127ec85f-9b17-4e6a-a3b2-e4a074b343dc","createdAtMs":1793964501745,"updatedAtMs":1793969188652,"claimOwnerKind":"open-session"}
+        {"schemaVersion":3,"deviceKey":"local:apple:ios:\(udid)","session":"t3-8df3016cf2a2eca76eb84e7a","workspace":"/Users/me/work/weather-app","stateDir":"/Users/me/.t3/userdata/device/agent-device","device":{"id":"\(udid)","family":"apple","appleOs":"ios","kind":"simulator","target":"mobile","name":"iPhone 17 Pro"},"ownerPid":\(pid),"ownerStartTime":"Fri Nov  6 12:28:12 2026","ownerToken":"127ec85f-9b17-4e6a-a3b2-e4a074b343dc","createdAtMs":1793964501745,"updatedAtMs":1793969188652,"claimOwnerKind":"open-session"}
         """.utf8)
     }
 
@@ -23,7 +23,7 @@ final class AgentDeviceTests: XCTestCase {
     // MARK: Commands
 
     func testT3CodeLauncherNamesItsSession() {
-        let call = AgentDeviceCall.parse("\(launcher) open com.punchbowl.iphone.staging --relaunch")
+        let call = AgentDeviceCall.parse("\(launcher) open com.example.weather --relaunch")
         XCTAssertEqual(call?.subcommand, "open")
         XCTAssertEqual(call?.session, "t3-669e258bfb303ed88328cc17")
         XCTAssertEqual(call?.devices, [])
@@ -73,7 +73,7 @@ final class AgentDeviceTests: XCTestCase {
         XCTAssertEqual(claim.deviceID, udid)
         XCTAssertEqual(claim.deviceName, "iPhone 17 Pro")
         XCTAssertEqual(claim.session, "t3-8df3016cf2a2eca76eb84e7a")
-        XCTAssertEqual(claim.project, "punchbowl-mobile")
+        XCTAssertEqual(claim.project, "weather-app")
         XCTAssertEqual(claim.ownerPID, 82362)
         XCTAssertEqual(claim.updated, Date(timeIntervalSince1970: 1_793_969_188.652))
         XCTAssertEqual(claim.eventLog.path,
@@ -105,7 +105,7 @@ final class AgentDeviceTests: XCTestCase {
         let text = ClaimText.advice(
             deviceName: "iPhone 17 Pro", status: status(quiet: 3480), owner: owner, state: .stale(.turnEnded),
             program: launcher, freeDevices: [free], now: now)
-        XCTAssertTrue(text.contains("claimed by agent-device session \"t3-8df3016cf2a2eca76eb84e7a\" (punchbowl-mobile)"))
+        XCTAssertTrue(text.contains("claimed by agent-device session \"t3-8df3016cf2a2eca76eb84e7a\" (weather-app)"))
         XCTAssertTrue(text.contains("no command for 58 min"))
         XCTAssertTrue(text.contains("waiting or --wait won't help"))
         XCTAssertTrue(text.contains("Ask the user"))
@@ -118,7 +118,7 @@ final class AgentDeviceTests: XCTestCase {
         let text = ClaimText.advice(
             deviceName: "iPhone 17 Pro", status: status(quiet: 40), owner: owner, state: .active,
             program: nil, freeDevices: [], now: now)
-        XCTAssertTrue(text.contains("It's in use by Claude Code in T3 Code in punchbowl-mobile"))
+        XCTAssertTrue(text.contains("It's in use by Claude Code in T3 Code in weather-app"))
         XCTAssertTrue(text.contains("don't close that session"))
         XCTAssertFalse(text.contains("close --session"))
     }

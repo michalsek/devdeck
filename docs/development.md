@@ -36,7 +36,7 @@ open ~/Applications/DevDeck.app --args --hooks claude            # install hooks
 open build/DevDeck.app --args --demo --open dashboard:devices    # demo mode
 ```
 
-Dashboard pages: `devices`, `leases`, `resources`, `servers`, `sounds`, `packs`,
+Dashboard pages: `agents`, `devices`, `leases`, `resources`, `servers`, `activity`, `sounds`, `packs`,
 `clients`, `general`.
 
 **Demo mode** fills DevDeck with made-up devices, servers, leases and load, for
@@ -56,6 +56,7 @@ first. The screenshots in the README come from demo mode.
 | `Sources/DevDeck/Sounds` | peon-ping settings |
 | `Sources/DevDeck/Demo` | demo mode data |
 | `Sources/devdeck-hook` | the helper the agent hooks run |
+| `Sources/DevDeckProtocol` | what the helper and the app share: the socket, timeouts, the reply, which calls reach DevDeck, and the shell command reader |
 | `helpers/` | the iOS and Android companion apps |
 | `scripts/` | app bundle and icon scripts |
 

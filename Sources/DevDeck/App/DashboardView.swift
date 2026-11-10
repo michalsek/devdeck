@@ -1,16 +1,19 @@
+import DevDeckProtocol
 import SwiftUI
 
 enum DashboardPage: String, Hashable, CaseIterable {
-    case devices, leases, resources, servers, sounds, packs, clients, general
+    case agents, devices, leases, resources, servers, activity, sounds, packs, clients, general
 
     static let storageKey = "dashboardPage"
 
     var title: String {
         switch self {
+        case .agents: "Agents"
         case .devices: "Devices"
         case .leases: "Leases"
         case .resources: "Resources"
         case .servers: "Dev Servers"
+        case .activity: "Activity"
         case .sounds: "Agent Sounds"
         case .packs: "Voice Packs"
         case .clients: "Agent Apps"
@@ -20,10 +23,12 @@ enum DashboardPage: String, Hashable, CaseIterable {
 
     var symbol: String {
         switch self {
+        case .agents: "cpu.fill"
         case .devices: "iphone.gen3"
         case .leases: "hand.raised.fill"
         case .resources: "gauge.with.dots.needle.67percent"
         case .servers: "server.rack"
+        case .activity: "list.bullet.rectangle.fill"
         case .sounds: "speaker.wave.2.fill"
         case .packs: "person.wave.2.fill"
         case .clients: "app.connected.to.app.below.fill"
@@ -33,10 +38,12 @@ enum DashboardPage: String, Hashable, CaseIterable {
 
     var color: Color {
         switch self {
+        case .agents: .purple
         case .devices: .blue
         case .leases: .indigo
         case .resources: .teal
         case .servers: .green
+        case .activity: .brown
         case .sounds: .pink
         case .packs: .orange
         case .clients: .purple
@@ -46,10 +53,12 @@ enum DashboardPage: String, Hashable, CaseIterable {
 
     var summary: String {
         switch self {
+        case .agents: "The coding agents working on this Mac: what each is doing, the devices it uses and what it started. Clean up after the ones that are done."
         case .devices: "Simulators, emulators and connected phones. Boot them, or shut down the ones you're done with."
         case .resources: "How loaded this Mac is, and how much heavy work agents may start at once. Over a limit, or low on memory, they wait."
         case .leases: "Who is using each simulator and device, and who's waiting for it. Agents wait for you, and for each other."
         case .servers: "Dev servers running on this Mac, found by their listening ports. Stop the ones that are left over."
+        case .activity: "What DevDeck decided about your agents: calls that waited or were turned away, what you did, and what was cleaned up."
         case .sounds: "The sounds peon-ping plays when a coding agent finishes, fails or needs your input."
         case .packs: "The voice that plays agent sounds. Click a pack to use it, or the play button to hear it."
         case .clients: "Choose which coding agents and apps can play sounds and show notifications."
@@ -62,6 +71,7 @@ enum DashboardPage: String, Hashable, CaseIterable {
 }
 
 struct DashboardView: View {
+    @EnvironmentObject private var agents: AgentStore
     @EnvironmentObject private var devices: DeviceStore
     @EnvironmentObject private var leases: LeaseStore
     @EnvironmentObject private var servers: ServerStore
@@ -75,10 +85,12 @@ struct DashboardView: View {
         NavigationSplitView {
             List(selection: Binding(get: { page }, set: { if let value = $0 { storedPage = value } })) {
                 Section {
+                    row(.agents, badge: agents.records.values.filter { $0.ended == nil }.count)
                     row(.devices, badge: devices.running.count)
                     row(.leases, badge: leases.book.waiters.count - leases.waitingForRoom.count)
                     row(.resources, badge: leases.waitingForRoom.count)
                     row(.servers, badge: servers.devServers.count)
+                    row(.activity)
                 }
                 if peon.installed {
                     Section {
@@ -96,10 +108,12 @@ struct DashboardView: View {
         } detail: {
             Group {
                 switch page {
+                case .agents: AgentsView()
                 case .devices: DevicesView()
                 case .leases: LeasesView()
                 case .resources: ResourcesView()
                 case .servers: ServersView()
+                case .activity: ActivityView()
                 case .sounds: SoundsView()
                 case .packs: PacksView()
                 case .clients: ClientsView()
@@ -226,7 +240,7 @@ struct GeneralView: View {
 private struct AgentHooksSection: View {
     @EnvironmentObject private var app: AppSettings
     @EnvironmentObject private var hooks: HookInstaller
-    @EnvironmentObject private var leases: LeaseStore
+    @EnvironmentObject private var broker: Broker
 
     var body: some View {
         Section {
@@ -251,6 +265,12 @@ private struct AgentHooksSection: View {
                 Text("Notify me when an agent has to wait")
                 Text("A notification says which agent waits and why, with Let Through and Turn Away buttons")
             }
+            Picker(selection: $app.androidTesting) {
+                ForEach(AppSettings.AndroidTesting.allCases) { Text($0.title).tag($0) }
+            } label: {
+                Text("Android testing")
+                Text("With only physical phones, agents that start or drive an emulator are turned away and told to use your phone; if none is connected, DevDeck asks you to connect one.")
+            }
             Toggle(isOn: $app.deviceMarkers) {
                 Text("Show a marker on the device")
                 Text("Installs the DevDeck companion on simulators and emulators an agent drives: a Live Activity in the Dynamic Island, or a silent notification on Android")
@@ -258,8 +278,8 @@ private struct AgentHooksSection: View {
         } header: {
             Text("Agent Activity")
         } footer: {
-            Text(leases.listening
-                ? "Agents report which simulator or device they're driving, and DevDeck marks it in purple. When you hold a device, an agent's next call on it waits (up to 9 minutes) until you release it. If DevDeck isn't running, nothing waits. Codex skips new or changed hooks until you trust them in /hooks."
+            Text(broker.listening || Demo.isOn
+                ? "Agents report which simulator or device they're driving, and DevDeck marks it in purple. When you hold a device, an agent's next call on it waits (up to \(Format.duration(HookProtocol.maxWait))) until you release it. If DevDeck isn't running, nothing waits. Codex skips new or changed hooks until you trust them in /hooks."
                 : "DevDeck couldn't open its socket, so agent activity isn't shown.")
                 .font(.caption)
                 .foregroundStyle(.secondary)

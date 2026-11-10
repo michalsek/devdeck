@@ -57,6 +57,8 @@ struct DeviceRow: View {
     @EnvironmentObject private var store: DeviceStore
     @EnvironmentObject private var leases: LeaseStore
     @EnvironmentObject private var claims: ClaimStore
+    @EnvironmentObject private var servers: ServerStore
+    @EnvironmentObject private var broker: Broker
     let device: DeviceItem
 
     var body: some View {
@@ -69,6 +71,10 @@ struct DeviceRow: View {
                     LeaseLine(lease: lease, waiting: leases.waiters(for: device), queued: leases.isQueued(for: device))
                 }
                 ForEach(claimed) { ClaimLine(status: $0) }
+                if device.isRunning, let link = servers.servers.metro(for: device) {
+                    MetroLine(link: link, agent: lease?.holder.session)
+                }
+                if let result = broker.results[device.id] { ResultLine(result: result) }
             }
             Spacer(minLength: 8)
             if device.isRunning { LeaseButton(device: device) }
@@ -102,6 +108,7 @@ struct DeviceRow: View {
     private var subtitle: String {
         var parts = [device.detail]
         if device.kind != .emulator { parts.append(device.shortID) }
+        if let problem = device.problem { parts.append(problem.text + ". " + problem.fix) }
         if device.kind == .physical, !device.isRunning, let seen = device.lastSeen {
             parts.append("last seen " + seen.formatted(.relative(presentation: .named)))
         }
@@ -193,5 +200,45 @@ private struct LeaseLine: View {
             (["Agents wait until you release it."] + waiting.map { "Waiting: \($0.session.label) (\($0.action))" })
                 .joined(separator: "\n")
         }
+    }
+}
+
+/// Under a device whose app is attached to a Metro server: "Weather · Metro :8081 ·
+/// weather-app", orange when the agent driving it works in another checkout.
+struct MetroLine: View {
+    let link: MetroLink
+    let agent: AgentSession?
+
+    var body: some View {
+        let wrong = agent.map { link.isWrong(for: $0.project) } ?? false
+        HStack(spacing: 4) {
+            Image(systemName: wrong ? "exclamationmark.triangle.fill" : "server.rack")
+            Text(([link.app].compactMap { $0 } + [link.summary]).joined(separator: " · ")
+                + (wrong ? " · not \(agent!.project.name)'s" : ""))
+        }
+        .font(.caption)
+        .foregroundStyle(wrong ? Color.orange : Color.secondary)
+        .lineLimit(1)
+        .help(wrong
+            ? "The app loads \(link.server.project.name)'s JavaScript from port \(link.port), but \(agent!.label) works in \(agent!.project.name). Its changes won't show."
+            : "The app loads its JavaScript from \(link.server.project.name)'s Metro on port \(link.port).")
+    }
+}
+
+/// Under a device: the last build, install or launch an agent ran on it, and how it went.
+private struct ResultLine: View {
+    let result: Broker.CallResult
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 5)) { context in
+            HStack(spacing: 4) {
+                Image(systemName: result.failed ? "xmark.circle.fill" : "checkmark.circle.fill")
+                Text("\(result.action) \(result.failed ? "failed" : "finished") \(Format.age(since: result.date, now: context.date)) ago · \(result.agent)")
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(result.failed ? Color.red : Color.secondary)
+        .lineLimit(1)
+        .help(result.output.isEmpty ? result.action : result.output)
     }
 }
