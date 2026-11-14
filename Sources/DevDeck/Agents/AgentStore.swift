@@ -178,6 +178,15 @@ final class AgentStore: ObservableObject {
         return agents
     }
 
+    /// The live session that booted each device, when only one did.
+    var bootedBy: [String: AgentSession] {
+        var sessions: [String: [AgentSession]] = [:]
+        for record in records.values where record.ended == nil {
+            for device in record.booted { sessions[device, default: []].append(record.session) }
+        }
+        return sessions.compactMapValues { $0.count == 1 ? $0[0] : nil }
+    }
+
     func forget(_ id: String) {
         records[id] = nil
     }

@@ -190,11 +190,11 @@ final class LeaseBookTests: XCTestCase {
             id: UUID(), session: claude, action: "boot-device", devices: ["new-sim"], releases: [],
             since: start + 5, deadline: start + 545, pools: [.iosSimulator])
         XCTAssertEqual(book.request(boot, running: ["old-sim", "other-sim"], now: start + 5), .allow)
-        // Its own simulator counts as free for it.
+        // Nor to its own: it boots another because it wants both.
         let again = LeaseBook.Waiter(
             id: UUID(), session: codex, action: "boot-device", devices: ["third-sim"], releases: [],
             since: start + 6, deadline: start + 546, pools: [.iosSimulator])
-        XCTAssertEqual(book.request(again, running: ["old-sim"], now: start + 6), .useRunning(["old-sim"]))
+        XCTAssertEqual(book.request(again, running: ["old-sim"], now: start + 6), .allow)
     }
 
     func testBootingInPlaceOfADeviceBeingShutDownIsARotation() {

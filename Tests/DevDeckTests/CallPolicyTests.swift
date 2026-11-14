@@ -88,24 +88,35 @@ final class CallPolicyTests: XCTestCase {
             row(102, "node", "node /weather/node_modules/.bin/expo start --port 8082", ppid: 101),
             row(7, "node", "node /maps/node_modules/.bin/expo start --port 8081"),
             row(300, "node", "node /home/scripts/jest --watch"),
+            // argent's tool server starts emulators for the agents that boot them.
+            row(500, "node", "node /lib/argent/dist/tool-server.cjs start"),
+            row(501, "qemu-system-aarc", "qemu-system-aarch64 -avd Pixel_9", ppid: 500),
+            row(502, "qemu-system-aarc", "qemu-system-aarch64 -avd Pixel_8", ppid: 500),
             row(13, "Simulator", "/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app/Contents/MacOS/Simulator"),
         ])
         let policy = CallPolicy(
             devices: DeviceIndex(devices: []),
             servers: [metro(7, port: 8081, project: "maps-app"), metro(102, port: 8082, project: "weather-app")],
             builds: [], leases: [:], owners: [7: maps], androidTesting: .anyDevice, metroWarned: [],
-            processes: processes, agents: [100: weather])
+            processes: processes, agents: [100: weather], booted: ["avd:Pixel_9": weather, "avd:Pixel_8": maps])
         let maps8081 = "maps-app's Metro on :8081 (Codex · maps-app started it)"
         let cases: [(String, CallPolicy.Reach?)] = [
             // As logged: only the session's own Metro matches.
             (#"pkill -f "expo start --port 8082"; kill 44981 2>/dev/null; xcrun simctl shutdown \#(sim) 2>&1 | tail -1"#, nil),
             ("kill 102", nil),
             ("pkill -f nothing-runs-like-this", nil),
+            ("pkill -f 'avd Pixel_9'", nil),
+            ("pkill -f 'avd Pixel_8'", .needsOK(
+                .init(segment: "pkill -f 'avd Pixel_8'", effect: "stops the Pixel_8 emulator (pid 502, Codex · maps-app started it)"),
+                wait: CallPolicy.killWait)),
             (#"xcrun simctl shutdown \#(sim); pkill -f "expo start --port 8081""#,
              .needsOK(.init(segment: #"pkill -f "expo start --port 8081""#, effect: "stops " + maps8081), wait: CallPolicy.killWait)),
             ("kill $(lsof -ti:8081)", .needsOK(.init(segment: "kill $(lsof -ti:8081)", effect: "stops " + maps8081), wait: CallPolicy.killWait)),
-            ("pkill -f jest", .needsOK(
-                .init(segment: "pkill -f jest", effect: "stops node (pid 300, you or another app started it)"), wait: CallPolicy.killWait)),
+            ("pkill -f jest", .refused(.notOnlyYours(
+                reason: "DevDeck: `pkill -f jest` would stop node (pid 300, you or another app started it), which DevDeck"
+                    + " can't tie to you, so nothing in this command was run. If they are yours, stop them by pid: kill 300."
+                    + " Otherwise leave them alone.",
+                segment: "pkill -f jest"))),
             ("killall Simulator", .needsOK(
                 .init(segment: "killall Simulator", effect: "quits Simulator, which closes every simulator window"), wait: nil)),
             ("xcrun simctl shutdown all", .needsOK(.init(segment: "xcrun simctl shutdown all", effect: "shuts down every simulator"), wait: nil)),

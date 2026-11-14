@@ -72,7 +72,8 @@ aren't tied to a device, but they do count as builds (see Resources).
   mouse input) for 10 minutes; see General → Release my holds. **Join Queue** makes a
   device yours as soon as the agent is done with it, and DevDeck sends a notification.
 - **Use what's running.** An agent that boots a simulator or emulator while one of the
-  same kind is running and free is turned away at once and told to use that one: each
+  same kind is running and nobody uses it (the agent itself included: it boots another
+  because it wants both) is turned away at once and told to use that one: each
   takes a few GB of memory. If it repeats the same boot within 5 minutes, DevDeck lets it
   through, since it needs that particular device. Before turning a boot away, DevDeck reads
   the device list again rather than trust one from a few seconds ago. A device a call is
@@ -144,12 +145,15 @@ call until an hour after it ends.
   for `kill <pid>`, `kill $(lsof -ti:<port>)`, `kill-port` and `fuser -k`, a dev server or
   build; for `pkill` and `killall`, everything the pattern matches, the way those tools
   match it. A process is the session's own if DevDeck saw the session start it (or the
-  process that started it), or it runs under the agent's process.
+  process that started it), it runs under the agent's process, or it's an emulator the
+  session booted (also through argent).
   - Only the session's own, or nothing: it runs.
   - The session's own and others': it's turned away at once, with the `kill <pid>` that
     stops just its own.
-  - Only others': it waits a minute for your OK, then the agent is turned away and told
-    whose they are.
+  - Another agent's, or a dev server or build nobody DevDeck knows started: it waits a
+    minute for your OK, then the agent is turned away and told whose they are.
+  - Only other processes DevDeck can't tie to anyone (a browser the agent opened, say): it's
+    turned away at once, with the pids to `kill` if they're the agent's.
 
   Notifications, the Leases page and Activity name the part of the command that's held and
   what it would stop.

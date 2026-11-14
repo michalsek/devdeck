@@ -188,13 +188,17 @@ struct LeaseBook {
     }
 
     /// For a call that boots a device: the `running` devices of the same kind it should use
-    /// instead. Nobody else is using or queued for them and no call is shutting them down,
-    /// and the agent didn't ask for this device again within `Timing.insist`.
+    /// instead. Nobody is using or queued for them (the agent itself included: it boots
+    /// another because it wants both) and no call is shutting them down, and the agent didn't
+    /// ask for this device again within `Timing.insist`.
     func suggestions(for waiter: Waiter, running: [String], now: Date) -> [String] {
         guard let device = waiter.devices.first,
               suggested[waiter.session.id + "|" + device].map({ now.timeIntervalSince($0) >= timing.insist }) ?? true
         else { return [] }
-        return running.filter { !isBlocked($0, for: waiter.session, now: now) && !queue.contains($0) && stopping[$0] == nil }
+        return running.filter {
+            leases[$0]?.holder.session?.id != waiter.session.id && !isBlocked($0, for: waiter.session, now: now)
+                && !queue.contains($0) && stopping[$0] == nil
+        }
     }
 
     /// The call starts heavy work and there's no room for it now.

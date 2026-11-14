@@ -136,7 +136,7 @@ final class Broker: ObservableObject {
         let policy = CallPolicy(
             devices: index, servers: servers.servers, builds: monitor.builds, leases: leases.book.leases,
             owners: agents.owners, androidTesting: settings.androidTesting, metroWarned: metroWarned,
-            processes: processes, agents: agents.liveProcesses)
+            processes: processes, agents: agents.liveProcesses, booted: agents.bootedBy)
         var waiter = LeaseBook.Waiter(event, session: session, claimDevices: claimDevices, devices: index, now: now)
         var refusal: CallPolicy.Refusal?
         switch policy.reach(event, by: session) {
