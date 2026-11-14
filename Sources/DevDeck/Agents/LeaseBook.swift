@@ -54,6 +54,14 @@ struct LeaseBook {
         var isUser: Bool { holder == .user }
     }
 
+    /// The part of a call that reaches past the agent's own work, so it waits for the user's OK.
+    struct Approval: Hashable {
+        /// The part of the command, e.g. `xcrun simctl shutdown all`.
+        let segment: String
+        /// "shuts down every simulator"
+        let effect: String
+    }
+
     /// An agent call waiting for a device.
     struct Waiter: Identifiable, Hashable {
         let id: UUID
@@ -61,13 +69,14 @@ struct LeaseBook {
         let action: String
         var devices: [String]
         var releases: [String]
+        /// Released devices the call shuts down.
+        var stops: [String] = []
         let since: Date
         var deadline: Date
         /// Heavy work the call starts.
         var pools: [Pool] = []
-        /// What the call does beyond the agent's own work ("shuts down every simulator"):
-        /// it waits for the user to let it through.
-        var approval: String?
+        /// What the call does beyond the agent's own work: it waits for the user to let it through.
+        var approval: Approval?
         /// A device it needs is waiting for the user ("Test iPhone is locked"): it waits
         /// until that's sorted.
         var needsUser: String?
@@ -98,6 +107,8 @@ struct LeaseBook {
         /// A boot turned away in favour of a running device goes through if asked again
         /// within this long: the agent needs that particular device.
         var insist: TimeInterval = 5 * 60
+        /// A device a call shut down counts as stopping until it's gone, or this long.
+        var stopping: TimeInterval = 60
     }
 
     enum Decision: Equatable {
@@ -140,6 +151,9 @@ struct LeaseBook {
     private(set) var reservations: [Reservation] = []
     /// Boots turned away in favour of a running device: "session|device" → when.
     private(set) var suggested: [String: Date] = [:]
+    /// Devices calls have shut down, by when, until they're gone: they aren't free, and they
+    /// don't count against the limits.
+    private(set) var stopping: [String: Date] = [:]
     private(set) var leases: [String: Lease] = [:]
     /// Devices the user is queued for.
     private(set) var queue: Set<String> = []
@@ -173,6 +187,20 @@ struct LeaseBook {
         used(pool, now: now) >= resources.limits[pool, default: Int.max]
     }
 
+    /// For a call that boots a device: the `running` devices of the same kind it should use
+    /// instead. Nobody is using or queued for them (the agent itself included: it boots
+    /// another because it wants both) and no call is shutting them down, and the agent didn't
+    /// ask for this device again within `Timing.insist`.
+    func suggestions(for waiter: Waiter, running: [String], now: Date) -> [String] {
+        guard let device = waiter.devices.first,
+              suggested[waiter.session.id + "|" + device].map({ now.timeIntervalSince($0) >= timing.insist }) ?? true
+        else { return [] }
+        return running.filter {
+            leases[$0]?.holder.session?.id != waiter.session.id && !isBlocked($0, for: waiter.session, now: now)
+                && !queue.contains($0) && stopping[$0] == nil
+        }
+    }
+
     /// The call starts heavy work and there's no room for it now.
     func needsRoom(_ waiter: Waiter, now: Date) -> Bool {
         !waiter.pools.isEmpty && (resources.memoryLow || waiter.pools.contains { isFull($0, now: now) })
@@ -197,15 +225,10 @@ struct LeaseBook {
         }
         // Booting another simulator while one of the same kind is running and free: use that
         // one, unless the agent asks again (it needs this particular device).
-        let free = running.filter { !isBlocked($0, for: waiter.session, now: now) && !queue.contains($0) }
-        if !free.isEmpty, let device = waiter.devices.first {
-            let key = waiter.session.id + "|" + device
-            if let asked = suggested[key], now.timeIntervalSince(asked) < timing.insist {
-                suggested[key] = nil
-            } else {
-                suggested[key] = now
-                return .useRunning(free)
-            }
+        if let device = waiter.devices.first, !running.isEmpty {
+            let free = suggestions(for: waiter, running: running, now: now)
+            suggested[waiter.session.id + "|" + device] = free.isEmpty ? nil : now
+            if !free.isEmpty { return .useRunning(free) }
         }
         let blocked = waiter.touched.filter { isBlocked($0, for: waiter.session, now: now) }
         if blocked.isEmpty {
@@ -371,6 +394,7 @@ struct LeaseBook {
         queue = queue.filter(running.contains)
         reservations.removeAll { $0.until <= now }
         suggested = suggested.filter { now.timeIntervalSince($0.value) < timing.insist }
+        stopping = stopping.filter { running.contains($0.key) && now.timeIntervalSince($0.value) < timing.stopping }
         let expired = waiters.filter { $0.deadline <= now }
         waiters.removeAll { $0.deadline <= now }
         effects.denied += expired.map { Denial(waiter: $0.id, reason: .timedOut) }
@@ -384,6 +408,7 @@ struct LeaseBook {
     /// the user holds stays theirs (a call they let through doesn't end their hold).
     private mutating func apply(_ waiter: Waiter, now: Date) {
         reservations += waiter.pools.map { Reservation(pool: $0, until: now.addingTimeInterval(60)) }
+        for device in waiter.stops { stopping[device] = now }
         for device in waiter.releases where !isHeldByUser(device) {
             leases[device] = nil
             queue.remove(device)

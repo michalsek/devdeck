@@ -92,6 +92,8 @@ final class DeviceStore: ObservableObject {
     @Published private(set) var loaded = false
 
     private var refreshing = false
+    /// When the last finished scan started.
+    private var scanned = Date.distantPast
     /// devicectl is slow (about a second), so physical devices refresh every
     /// `physicalInterval` at most, unless forced.
     private var physical: [DeviceItem] = []
@@ -120,6 +122,7 @@ final class DeviceStore: ObservableObject {
         guard !refreshing else { return }
         refreshing = true
         defer { refreshing = false }
+        let started = Date.now
         let includePhysical = force || Date.now.timeIntervalSince(physicalScanned) >= Self.physicalInterval
         if includePhysical { physicalScanned = .now }
 
@@ -134,7 +137,21 @@ final class DeviceStore: ObservableObject {
             if lhs.isRunning != rhs.isRunning { return lhs.isRunning }
             return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
         }
+        scanned = started
         loaded = true
+    }
+
+    /// Waits for a scan that started after now, for a decision a list from a few seconds ago
+    /// can't be trusted with.
+    func recheck() async {
+        let asked = Date.now
+        while scanned < asked {
+            if refreshing {
+                try? await Task.sleep(for: .milliseconds(50))
+            } else {
+                await refresh()
+            }
+        }
     }
 
     // MARK: - Actions

@@ -78,24 +78,59 @@ final class CallPolicyTests: XCTestCase {
         }
     }
 
-    func testStoppingSomeoneElsesServerNeedsTheUsersOK() {
-        let servers = [metro(7, port: 8081, project: "maps-app")]
-        func event(_ command: String) -> HookEvent {
-            HookEvent(json: [
-                "agent": "claude", "session_id": "a", "hook_event_name": "PreToolUse", "tool_name": "Bash",
-                "tool_input": ["command": command],
-            ])!
+    func testKillsAreJudgedByWhoStartedTheProcessesTheyHit() {
+        func row(_ pid: Int32, _ name: String, _ command: String, ppid: Int32 = 1) -> (Int32, ServerScanner.ProcessRow) {
+            (pid, .init(pid: pid, ppid: ppid, started: nil, command: command, name: name))
         }
-        let kill = event("kill $(lsof -ti:8081)")
-        XCTAssertEqual(
-            policy([], servers: servers, owners: [7: maps]).approval(kill, by: weather),
-            .init(reason: "stops maps-app's Metro on :8081 (Codex · maps-app started it)"))
-        XCTAssertNil(policy([], servers: servers, owners: [7: weather]).approval(kill, by: weather))
-        // Nobody DevDeck knows started it: the user is asked, briefly.
-        XCTAssertEqual(
-            policy([], servers: servers).approval(event("kill 7"), by: weather),
-            .init(reason: "stops maps-app's Metro on :8081 (you or another app started it)", wait: CallPolicy.unknownOwnerWait))
-        XCTAssertEqual(
-            policy([]).approval(event("killall Simulator"), by: weather)?.reason, CommandGuard.everyoneEffect("killall Simulator"))
+        let processes = Dictionary(uniqueKeysWithValues: [
+            row(100, "claude", "claude"),
+            row(101, "zsh", "/bin/zsh -c nice yarn expo start --port 8082", ppid: 100),
+            row(102, "node", "node /weather/node_modules/.bin/expo start --port 8082", ppid: 101),
+            row(7, "node", "node /maps/node_modules/.bin/expo start --port 8081"),
+            row(300, "node", "node /home/scripts/jest --watch"),
+            // argent's tool server starts emulators for the agents that boot them.
+            row(500, "node", "node /lib/argent/dist/tool-server.cjs start"),
+            row(501, "qemu-system-aarc", "qemu-system-aarch64 -avd Pixel_9", ppid: 500),
+            row(502, "qemu-system-aarc", "qemu-system-aarch64 -avd Pixel_8", ppid: 500),
+            row(13, "Simulator", "/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app/Contents/MacOS/Simulator"),
+        ])
+        let policy = CallPolicy(
+            devices: DeviceIndex(devices: []),
+            servers: [metro(7, port: 8081, project: "maps-app"), metro(102, port: 8082, project: "weather-app")],
+            builds: [], leases: [:], owners: [7: maps], androidTesting: .anyDevice, metroWarned: [],
+            processes: processes, agents: [100: weather], booted: ["avd:Pixel_9": weather, "avd:Pixel_8": maps])
+        let maps8081 = "maps-app's Metro on :8081 (Codex · maps-app started it)"
+        let cases: [(String, CallPolicy.Reach?)] = [
+            // As logged: only the session's own Metro matches.
+            (#"pkill -f "expo start --port 8082"; kill 44981 2>/dev/null; xcrun simctl shutdown \#(sim) 2>&1 | tail -1"#, nil),
+            ("kill 102", nil),
+            ("pkill -f nothing-runs-like-this", nil),
+            ("pkill -f 'avd Pixel_9'", nil),
+            ("pkill -f 'avd Pixel_8'", .needsOK(
+                .init(segment: "pkill -f 'avd Pixel_8'", effect: "stops the Pixel_8 emulator (pid 502, Codex · maps-app started it)"),
+                wait: CallPolicy.killWait)),
+            (#"xcrun simctl shutdown \#(sim); pkill -f "expo start --port 8081""#,
+             .needsOK(.init(segment: #"pkill -f "expo start --port 8081""#, effect: "stops " + maps8081), wait: CallPolicy.killWait)),
+            ("kill $(lsof -ti:8081)", .needsOK(.init(segment: "kill $(lsof -ti:8081)", effect: "stops " + maps8081), wait: CallPolicy.killWait)),
+            ("pkill -f jest", .refused(.notOnlyYours(
+                reason: "DevDeck: `pkill -f jest` would stop node (pid 300, you or another app started it), which DevDeck"
+                    + " can't tie to you, so nothing in this command was run. If they are yours, stop them by pid: kill 300."
+                    + " Otherwise leave them alone.",
+                segment: "pkill -f jest"))),
+            ("killall Simulator", .needsOK(
+                .init(segment: "killall Simulator", effect: "quits Simulator, which closes every simulator window"), wait: nil)),
+            ("xcrun simctl shutdown all", .needsOK(.init(segment: "xcrun simctl shutdown all", effect: "shuts down every simulator"), wait: nil)),
+            (#"pkill -f "expo start""#, .refused(.notOnlyYours(
+                reason: #"DevDeck: `pkill -f "expo start"` would also stop "# + maps8081
+                    + ", so nothing in this command was run. To stop only your own processes, run: kill 101 102.",
+                segment: #"pkill -f "expo start""#))),
+        ]
+        for (command, expected) in cases {
+            let event = HookEvent(json: [
+                "agent": "claude", "session_id": "a", "hook_event_name": "PreToolUse", "tool_name": "Bash",
+                "tool_input": ["command": command], "agent_pid": 100,
+            ])!
+            XCTAssertEqual(policy.reach(event, by: weather), expected, command)
+        }
     }
 }

@@ -12,6 +12,11 @@ struct CallPolicy {
     let androidTesting: AppSettings.AndroidTesting
     /// "session|device|Metro pid" the agent has been warned about.
     let metroWarned: Set<String>
+    /// For a call that stops processes: the processes the agent may signal, the process of
+    /// each live agent session, and the devices each one booted.
+    var processes: [Int32: ServerScanner.ProcessRow] = [:]
+    var agents: [Int32: AgentSession] = [:]
+    var booted: [String: AgentSession] = [:]
 
     /// A call turned away before it reaches the book.
     enum Refusal: Equatable {
@@ -19,10 +24,13 @@ struct CallPolicy {
         case phonesOnly(reason: String, noPhone: Bool)
         /// The app on the device loads another checkout's Metro; asking again goes through.
         case wrongMetro(reason: String, key: String)
+        /// The command stops processes that aren't the agent's, and a `kill <pid>` does what it
+        /// should: stop just its own, or the ones it believes are its own.
+        case notOnlyYours(reason: String, segment: String)
 
         var reason: String {
             switch self {
-            case .phonesOnly(let reason, _), .wrongMetro(let reason, _): reason
+            case .phonesOnly(let reason, _), .wrongMetro(let reason, _), .notOnlyYours(let reason, _): reason
             }
         }
     }
@@ -49,36 +57,120 @@ struct CallPolicy {
         return nil
     }
 
-    struct Approval: Equatable {
-        /// "shuts down every simulator"
-        let reason: String
-        /// How long it waits for the user, when shorter than any call's.
-        var wait: TimeInterval?
+    /// What a call does beyond the agent's own work.
+    enum Reach: Equatable {
+        /// It waits for the user's OK, for at most `wait` when that's shorter than any call's.
+        case needsOK(LeaseBook.Approval, wait: TimeInterval?)
+        case refused(Refusal)
     }
 
-    /// A kill of something DevDeck can't tie to any agent waits this long for the user's OK.
-    /// It's most likely the user's own (or, rarely, an agent's DevDeck couldn't place), and
-    /// either way an agent shouldn't sit on it for minutes.
-    static let unknownOwnerWait: TimeInterval = 60
+    /// A kill of another agent's processes, or of a dev server or build nobody DevDeck knows
+    /// started, waits this long for the user's OK. An agent blocked for minutes on a kill it
+    /// most likely got wrong helps nobody: it's then told which processes are whose.
+    static let killWait: TimeInterval = 60
 
-    /// What the call does beyond the agent's own work, so it waits for the user's OK:
-    /// "shuts down every simulator", or a kill aimed at a dev server or build that
-    /// another agent or the user started.
-    func approval(_ event: HookEvent, by session: AgentSession) -> Approval? {
-        if let effect = event.everyoneEffect { return Approval(reason: effect) }
-        let byPort = event.kills.ports.compactMap { port in servers.first { $0.ports.contains(port) } }
-        let byPID = event.kills.pids.compactMap { pid in servers.first { $0.pid == pid } }
-        let targets = (byPort + byPID).map { ($0.pid, "\($0.project.name)'s \($0.kind) on :\($0.portList)") }
-            + event.kills.pids.compactMap { pid in
-                builds.first { $0.pid == pid }.map { (pid, "\($0.project ?? "another project")'s \($0.kind)") }
+    /// What the call does beyond the agent's own work: something every agent relies on
+    /// ("shuts down every simulator"), or processes another agent or the user started.
+    /// Turned away at once, with the `kill <pid>` to run instead, when that's all it takes:
+    /// the command stops some of the agent's own processes too, or the others are plain
+    /// processes nobody DevDeck knows started (which may well be the agent's, such as a
+    /// browser it opened).
+    func reach(_ event: HookEvent, by session: AgentSession) -> Reach? {
+        if let effect = event.everyoneEffect { return .needsOK(effect, wait: nil) }
+        var own: [Int32] = []
+        var others: [(segment: String, pid: Int32)] = []
+        var shared: LeaseBook.Approval?
+        var needOK = false
+        for kill in event.kills {
+            for pid in targets(of: kill, agentPID: event.agentPID) {
+                let owner = owner(of: pid)
+                if let effect = processes[pid].flatMap(CommandGuard.sharedEffect) {
+                    shared = shared ?? LeaseBook.Approval(segment: kill.segment, effect: effect)
+                } else if owner?.id == session.id {
+                    own.append(pid)
+                    continue
+                } else if owner != nil || servers.contains(where: { $0.pid == pid }) || builds.contains(where: { $0.pid == pid }) {
+                    needOK = true
+                }
+                others.append((kill.segment, pid))
             }
-        for (pid, name) in targets where owners[pid]?.id != session.id {
-            let owner = owners[pid]
-            return Approval(
-                reason: "stops \(name) (\(owner.map { "\($0.label) started it" } ?? "you or another app started it"))",
-                wait: owner == nil ? Self.unknownOwnerWait : nil)
+        }
+        guard let first = others.first else { return nil }
+        let pids = Array(Set(others.map(\.pid))).sorted()
+        let names = Self.list(pids.map(describe))
+        if !own.isEmpty {
+            return .refused(.notOnlyYours(
+                reason: "DevDeck: `\(first.segment)` would also stop \(names), so nothing in this command was run."
+                    + " To stop only your own processes, run: kill \(Self.pids(own)).",
+                segment: first.segment))
+        }
+        if let shared { return .needsOK(shared, wait: nil) }
+        if needOK { return .needsOK(LeaseBook.Approval(segment: first.segment, effect: "stops \(names)"), wait: Self.killWait) }
+        return .refused(.notOnlyYours(
+            reason: "DevDeck: `\(first.segment)` would stop \(names), which DevDeck can't tie to you, so nothing in"
+                + " this command was run. If they are yours, stop them by pid: kill \(Self.pids(pids))."
+                + " Otherwise leave them alone.",
+            segment: first.segment))
+    }
+
+    /// "101 102"
+    private static func pids(_ pids: [Int32]) -> String {
+        Array(Set(pids)).sorted().map(String.init).joined(separator: " ")
+    }
+
+    /// The processes a kill stops that DevDeck judges: dev servers and builds for a pid or
+    /// port, everything a pattern matches (except the agent and its ancestors, which
+    /// `pkill` skips).
+    private func targets(of kill: CommandGuard.Kill, agentPID: Int32?) -> [Int32] {
+        switch kill.target {
+        case .pid(let pid):
+            return servers.contains { $0.pid == pid } || builds.contains { $0.pid == pid } ? [pid] : []
+        case .port(let port):
+            return servers.filter { $0.ports.contains(port) }.map(\.pid)
+        case .processes(let pattern):
+            var excluded: Set<Int32> = []
+            var walker = agentPID
+            while let pid = walker, pid > 1, excluded.insert(pid).inserted { walker = processes[pid]?.ppid }
+            return pattern.matches(in: processes, excluding: excluded).map(\.pid)
+        }
+    }
+
+    /// The session a process belongs to: DevDeck saw the session start it or one of its
+    /// ancestors, it runs under a live agent's process, or it's an emulator the session
+    /// booted (argent's tool server starts those, not the agent). The environment isn't
+    /// asked, since daemons that serve every agent (adb, Gradle, argent's tool server) carry
+    /// the session that happened to start them.
+    private func owner(of pid: Int32) -> AgentSession? {
+        var walker: Int32? = pid
+        var seen: Set<Int32> = []
+        while let current = walker, current > 1, seen.insert(current).inserted {
+            if let owner = owners[current] ?? agents[current] { return owner }
+            if let avd = processes[current].flatMap(AgentStore.emulatorAVD), let owner = booted[DeviceItem.avdID(avd)] {
+                return owner
+            }
+            walker = processes[current]?.ppid
         }
         return nil
+    }
+
+    /// "maps-app's Metro on :8081 (Codex · maps-app started it)", "node (pid 4121, you or another app started it)"
+    private func describe(_ pid: Int32) -> String {
+        let starter = owner(of: pid).map { "\($0.label) started it" } ?? "you or another app started it"
+        if let server = servers.first(where: { $0.pid == pid }) {
+            return "\(server.project.name)'s \(server.kind) on :\(server.portList) (\(starter))"
+        }
+        if let build = builds.first(where: { $0.pid == pid }) {
+            return "\(build.project ?? "another project")'s \(build.kind) (\(starter))"
+        }
+        if let avd = processes[pid].flatMap(AgentStore.emulatorAVD) { return "the \(avd) emulator (pid \(pid), \(starter))" }
+        return "\(processes[pid]?.name ?? "process") (pid \(pid), \(starter))"
+    }
+
+    /// "a, b and 3 more"
+    private static func list(_ names: [String]) -> String {
+        let shown = names.count > 3 ? Array(names.prefix(2)) + ["\(names.count - 2) more"] : names
+        guard shown.count > 1 else { return shown.first ?? "" }
+        return shown.dropLast().joined(separator: ", ") + " and " + shown.last!
     }
 
     /// "Test iPhone is locked: unlock it" when a physical device the call needs can't be used

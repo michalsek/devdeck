@@ -169,6 +169,24 @@ final class AgentStore: ObservableObject {
         return owners
     }
 
+    /// The process of each live session.
+    var liveProcesses: [Int32: AgentSession] {
+        var agents: [Int32: AgentSession] = [:]
+        for record in records.values where record.ended == nil {
+            if let pid = record.pid { agents[pid] = record.session }
+        }
+        return agents
+    }
+
+    /// The live session that booted each device, when only one did.
+    var bootedBy: [String: AgentSession] {
+        var sessions: [String: [AgentSession]] = [:]
+        for record in records.values where record.ended == nil {
+            for device in record.booted { sessions[device, default: []].append(record.session) }
+        }
+        return sessions.compactMapValues { $0.count == 1 ? $0[0] : nil }
+    }
+
     func forget(_ id: String) {
         records[id] = nil
     }

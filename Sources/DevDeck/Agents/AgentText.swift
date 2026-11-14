@@ -10,14 +10,15 @@ struct AgentText {
     let memoryProblem: String?
     let now: Date
 
-    /// "boot-device on iPhone 18 Pro" or "npx expo run:ios"
+    /// "boot-device on iPhone 18 Pro", "npx expo run:ios", or the part of the command that needs the user's OK.
     func describe(_ waiter: LeaseBook.Waiter) -> String {
-        waiter.devices.isEmpty ? waiter.action : "\(waiter.action) on \(devicesNamed(waiter))"
+        if let approval = waiter.approval { return approval.segment }
+        return waiter.devices.isEmpty ? waiter.action : "\(waiter.action) on \(devicesNamed(waiter))"
     }
 
     /// Why a call waits: "you're holding iPhone 17", "Codex · web is using Pixel 9", or room.
     func waitReason(_ waiter: LeaseBook.Waiter) -> String {
-        if let approval = waiter.approval { return "it needs your OK: it \(approval)" }
+        if let approval = waiter.approval { return "it needs your OK: it \(approval.effect)" }
         if let needs = waiter.needsUser { return needs }
         let blocked = blockedDevices(waiter)
         guard !blocked.isEmpty else { return roomProblem(waiter) }
@@ -49,10 +50,10 @@ struct AgentText {
     func denyReason(_ waiter: LeaseBook.Waiter?, _ reason: LeaseBook.DenyReason) -> String {
         if reason == .sessionEnded { return "DevDeck: your session ended, so this call was not run." }
         if let waiter, let approval = waiter.approval {
-            return "DevDeck: \"\(waiter.action)\" \(approval), so it waits for the user's OK, and "
+            return "DevDeck: `\(approval.segment)` \(approval.effect), so it waited for the user's OK, and "
                 + (reason == .dismissed ? "the user said no." : "the user didn't answer in time.")
-                + " Act only on your own devices and processes: shut down your simulator by its UDID, stop the"
-                + " server you started by its pid, and leave other agents' work alone."
+                + " Nothing in this command was run. Act only on your own devices and processes: shut down your"
+                + " simulator by its UDID, stop what you started by its pid, and leave other agents' work alone."
         }
         if let waiter, let needs = waiter.needsUser {
             return "DevDeck: \(needs), so \"\(waiter.action)\" waited for the user, and "
@@ -87,16 +88,19 @@ struct AgentText {
             + " or wait and try this device again later. IDs: \(free.joined(separator: ", "))."
     }
 
-    /// What the agent reads when it would boot a device while one of the same kind is free.
+    /// What the agent reads when it would boot a device while one of the same kind is free. It
+    /// leads with the outcome: agents that skim it carry on with the device they asked for.
     func useRunningReason(_ waiter: LeaseBook.Waiter, free: [String]) -> String {
         let names = free.map(devices.name(of:))
         let first = names[0]
+        let wanted = devicesNamed(waiter)
         let insist = Format.duration(book.timing.insist)
-        return "DevDeck: \(names.count == 1 ? "\(first) is" : names.joined(separator: ", ") + " are") already running"
-            + " and nobody is using \(names.count == 1 ? "it" : "them"), so booting \(devicesNamed(waiter)) was not run"
-            + " (each simulator or emulator takes a few GB of memory). Use \(first) instead (ID \(free[0]))."
-            + " If you need \(devicesNamed(waiter)) specifically, run the same command again within \(insist)"
-            + " and DevDeck will let it through."
+        return "DevDeck did not boot \(wanted): it is not running, so don't use it until a boot succeeds."
+            + " \(names.count == 1 ? "\(first) is" : names.joined(separator: ", ") + " are") already running and"
+            + " nobody is using \(names.count == 1 ? "it" : "them") (each simulator or emulator takes a few GB of memory):"
+            + " use \(first) instead (ID \(free[0]))."
+            + " If you need \(wanted) specifically, run the same command again within \(insist) and DevDeck will let it"
+            + " through. To switch devices, shut down the one you're done with before booting the next."
     }
 
     /// What the agent reads when it reaches for an Android emulator and the user wants

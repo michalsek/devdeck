@@ -63,6 +63,9 @@ enum ServerScanner {
         let ppid: Int32
         let started: Date?
         let command: String
+        /// The name the kernel keeps for it (what `pkill` and `killall` match without `-f`): the
+        /// executable's file name, cut to 16 characters.
+        let name: String
 
         var executable: String {
             (command.split(separator: " ").first.map(String.init) ?? command)
@@ -166,7 +169,7 @@ enum ServerScanner {
         for (name, needles) in web where needles.contains(where: { c.contains($0) }) {
             return (name, .devServer, true)
         }
-        let runtime = ProcessRow(pid: 0, ppid: 0, started: nil, command: command).executable
+        let runtime = ProcessRow(pid: 0, ppid: 0, started: nil, command: command, name: "").executable
         let label = runtime.lowercased().hasPrefix("python") ? "Python" : runtime.capitalized
         return ("\(label) server", .devServer, true)
     }

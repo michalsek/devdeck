@@ -36,7 +36,7 @@ final class HookEventTests: XCTestCase {
     func testSimctlCommands() {
         XCTAssertEqual(shell("xcrun simctl launch \(udid) com.example.app")?.targets, [.id(udid)])
         XCTAssertEqual(shell("xcrun simctl io booted screenshot /tmp/a.png")?.targets, [.bootedSimulator])
-        XCTAssertEqual(shell("cd ios && xcrun simctl shutdown \(udid)")?.releases, [.id(udid)])
+        XCTAssertEqual(shell("cd ios && xcrun simctl shutdown \(udid)")?.stops, [.id(udid)])
         XCTAssertEqual(shell("xcrun simctl shutdown all")?.releases, [.allSimulators])
         XCTAssertNil(shell("xcrun simctl list devices booted -j"))
     }
@@ -110,31 +110,74 @@ final class HookEventTests: XCTestCase {
     }
 
     func testCommandsThatReachPastTheAgentsOwnWork() {
-        let effects: [(String, Bool)] = [
-            ("killall Simulator", true),
-            ("pkill -9 -f qemu-system", true),
-            ("pkill node", true),
-            ("xcrun simctl shutdown all", true),
-            ("xcrun simctl shutdown \(udid)", false),
-            ("adb kill-server", true),
-            ("sudo launchctl kickstart -k system/com.apple.CoreSimulator.CoreSimulatorService", true),
-            ("killall Finder", false),
+        let effects: [(String, String?)] = [
+            ("cd ios && xcrun simctl shutdown all", "xcrun simctl shutdown all"),
+            ("xcrun simctl shutdown \(udid)", nil),
+            ("adb kill-server; adb devices", "adb kill-server"),
+            ("sudo launchctl kickstart -k system/com.apple.CoreSimulator.CoreSimulatorService",
+             "sudo launchctl kickstart -k system/com.apple.CoreSimulator.CoreSimulatorService"),
+            // Judged by the processes they hit, not by their text.
+            ("killall Simulator", nil),
         ]
-        for (command, guarded) in effects {
-            XCTAssertEqual(CommandGuard.everyoneEffect(command) != nil, guarded, command)
+        for (command, segment) in effects {
+            XCTAssertEqual(CommandGuard.everyoneEffect(command)?.segment, segment, command)
         }
         XCTAssertNotNil(CommandGuard.everyoneEffect(argent: "stop-all-simulator-servers", [:]))
         XCTAssertNil(CommandGuard.everyoneEffect(argent: "stop-all-simulator-servers", ["devices": [udid]]))
 
-        XCTAssertEqual(CommandGuard.kills("kill -9 4122 4123"), .init(pids: [4122, 4123]))
-        XCTAssertEqual(CommandGuard.kills("kill $(lsof -ti:8081)"), .init(ports: [8081]))
-        XCTAssertEqual(CommandGuard.kills("lsof -t -i tcp:8082 | xargs kill"), .init(ports: [8082]))
-        XCTAssertEqual(CommandGuard.kills("npx kill-port 8083"), .init(ports: [8083]))
-        XCTAssertEqual(CommandGuard.kills("lsof -i :8081"), .init())
+        let kills: [(String, [CommandGuard.Kill.Target])] = [
+            ("kill -9 4122 4123", [.pid(4122), .pid(4123)]),
+            ("kill $(lsof -ti:8081)", [.port(8081)]),
+            ("lsof -t -i tcp:8082 | xargs kill", [.port(8082)]),
+            ("npx kill-port 8083", [.port(8083)]),
+            ("lsof -i :8081", []),
+            ("killall -s node", []),
+        ]
+        for (command, targets) in kills {
+            XCTAssertEqual(CommandGuard.kills(command).map(\.target), targets, command)
+        }
+        // Each names the part of the command it came from.
+        XCTAssertEqual(
+            shell(#"xcrun simctl shutdown \#(udid); pkill -f "expo start --port 8082""#)?.kills.map(\.segment),
+            [#"pkill -f "expo start --port 8082""#])
+    }
 
-        // They reach DevDeck even though they name no device.
-        XCTAssertEqual(shell("killall Simulator")?.everyoneEffect, CommandGuard.everyoneEffect("killall Simulator"))
-        XCTAssertEqual(shell("kill $(lsof -ti:8081)")?.kills.ports, [8081])
+    func testPkillAndKillallMatchProcessesTheWayTheToolsDo() {
+        func row(_ pid: Int32, _ name: String, _ command: String, ppid: Int32 = 1) -> ServerScanner.ProcessRow {
+            .init(pid: pid, ppid: ppid, started: Date(timeIntervalSince1970: TimeInterval(pid)), command: command, name: name)
+        }
+        let table = Dictionary(uniqueKeysWithValues: [
+            row(10, "node", "node /app/node_modules/.bin/expo start --port 8082 --dev-client"),
+            row(11, "node", "node /web/node_modules/.bin/expo start --port 8081"),
+            row(12, "node", "node /app/node_modules/.bin/jest --watch", ppid: 10),
+            row(13, "Simulator", "/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app/Contents/MacOS/Simulator"),
+            row(14, "qemu-system-aarc", "qemu-system-aarch64 -avd Pixel_9"),
+        ].map { ($0.pid, $0) })
+        let cases: [(String, [Int32])] = [
+            (#"pkill -f "expo start --port 8082""#, [10]),
+            (#"pkill -9 -f 'expo start'"#, [10, 11]),
+            ("pkill node", [10, 11, 12]),
+            ("pkill -x nod", []),
+            ("pkill -fi SIMULATOR.APP", [13]),
+            ("pkill -n node", [12]),
+            ("pkill -P 10", [12]),
+            ("pkill -f qemu-system", [14]),
+            ("pkill -f 'unclosed(", []),
+            ("killall Simulator", [13]),
+            ("killall -KILL qemu-system-aarch64", [14]),
+            ("killall -m 'qemu.*'", [14]),
+            ("killall nod", []),
+        ]
+        for (command, pids) in cases {
+            guard case .processes(let pattern)? = CommandGuard.kills(command).first?.target else {
+                XCTFail("no pattern: \(command)")
+                continue
+            }
+            XCTAssertEqual(pattern.matches(in: table, excluding: []).map(\.pid), pids, command)
+        }
+        // pkill skips the shell that runs it and that shell's ancestors.
+        guard case .processes(let node)? = CommandGuard.kills("pkill node").first?.target else { return XCTFail() }
+        XCTAssertEqual(node.matches(in: table, excluding: [10]).map(\.pid), [11, 12])
     }
 
     func testPhysicalDeviceCommandsNameTheirDevice() {

@@ -4,7 +4,7 @@ import XCTest
 
 final class ServerScannerTests: XCTestCase {
     private func row(_ pid: Int32, _ ppid: Int32, _ command: String) -> ServerScanner.ProcessRow {
-        .init(pid: pid, ppid: ppid, started: nil, command: command)
+        .init(pid: pid, ppid: ppid, started: nil, command: command, name: "")
     }
 
     func testClassify() {
