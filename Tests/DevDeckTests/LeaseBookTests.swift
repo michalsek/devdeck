@@ -197,6 +197,25 @@ final class LeaseBookTests: XCTestCase {
         XCTAssertEqual(book.request(again, running: ["old-sim"], now: start + 6), .useRunning(["old-sim"]))
     }
 
+    func testBootingInPlaceOfADeviceBeingShutDownIsARotation() {
+        var book = LeaseBook()
+        func boot(_ device: String, at offset: TimeInterval) -> LeaseBook.Waiter {
+            LeaseBook.Waiter(
+                id: UUID(), session: claude, action: "boot-device", devices: [device], releases: [],
+                since: start + offset, deadline: start + offset + 540, pools: [.iosSimulator])
+        }
+        _ = book.request(call(claude, "iphone"), now: start)
+        let shutdown = LeaseBook.Waiter(
+            id: UUID(), session: claude, action: "simctl shutdown", devices: [], releases: ["iphone"], stops: ["iphone"],
+            since: start + 1, deadline: start + 541)
+        XCTAssertEqual(book.request(shutdown, now: start + 1), .allow)
+        // A second later the device list still shows the iPhone booted.
+        XCTAssertEqual(book.request(boot("ipad", at: 2), running: ["iphone"], now: start + 2), .allow)
+        // A shutdown that didn't take: after a minute it's a running device like any other.
+        _ = tick(&book, at: 61, running: ["iphone", "ipad"])
+        XCTAssertEqual(book.suggestions(for: boot("ipad-mini", at: 62), running: ["iphone"], now: start + 62), ["iphone"])
+    }
+
     func testCancelledWaiterIsForgotten() {
         var book = LeaseBook()
         book.hold("sim", now: start)
@@ -223,7 +242,7 @@ final class LeaseBookTests: XCTestCase {
     func testACallThatAffectsEveryoneWaitsForTheUser() {
         var book = LeaseBook()
         var killall = call(claude, "sim")
-        killall.approval = "quits the Simulator app"
+        killall.approval = .init(segment: "killall Simulator", effect: "quits Simulator, which closes every simulator window")
         XCTAssertEqual(book.request(killall, now: start), .wait)
         XCTAssertTrue(tick(&book, at: 60).allowed.isEmpty)
         XCTAssertEqual(book.forceAllow(killall.id, now: start + 61).allowed, [killall.id])

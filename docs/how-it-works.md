@@ -74,7 +74,11 @@ aren't tied to a device, but they do count as builds (see Resources).
 - **Use what's running.** An agent that boots a simulator or emulator while one of the
   same kind is running and free is turned away at once and told to use that one: each
   takes a few GB of memory. If it repeats the same boot within 5 minutes, DevDeck lets it
-  through, since it needs that particular device.
+  through, since it needs that particular device. Before turning a boot away, DevDeck reads
+  the device list again rather than trust one from a few seconds ago. A device a call is
+  shutting down (`simctl shutdown <udid>`, `adb emu kill`) isn't free and doesn't count
+  against the limits, so an agent that shuts one simulator down and boots another in its
+  place goes straight through.
 - A call waits up to 9 minutes. Then it's turned away, and the agent reads why and which
   devices are free. On the **Leases** page you can also let a waiting call go next
   (**Move to Front**) or turn it away now (**Turn Away**).
@@ -131,13 +135,24 @@ call until an hour after it ends.
 ## Guardrails
 
 - **Commands that affect everyone** wait for your OK (**Let Through** or **Turn Away**,
-  in a notification or on the Leases page; letting one through doesn't end your holds): `killall` / `pkill` of simulators, emulators,
-  Node, Java, `xcodebuild` or adb; `simctl shutdown all` / `erase all`; `adb kill-server`;
-  restarting CoreSimulator; argent's `stop-all-simulator-servers` without a device list.
-- **Stopping someone else's server.** `kill <pid>`, `kill $(lsof -ti:<port>)`,
-  `kill-port` and `fuser -k` aimed at a dev server or build another session started wait
-  for your OK too. One DevDeck can't tie to any agent (most likely yours) waits a minute,
-  then the agent is turned away.
+  in a notification or on the Leases page; letting one through doesn't end your holds):
+  `simctl shutdown all` / `erase all`; `adb kill-server`; restarting CoreSimulator; argent's
+  `stop-all-simulator-servers` without a device list; and a kill that would stop something
+  every agent uses: the Simulator app or Device Hub, CoreSimulator, the adb server, Gradle
+  and Kotlin daemons, argent's tool server.
+- **Stopping processes.** DevDeck judges a kill by the processes it would stop right now:
+  for `kill <pid>`, `kill $(lsof -ti:<port>)`, `kill-port` and `fuser -k`, a dev server or
+  build; for `pkill` and `killall`, everything the pattern matches, the way those tools
+  match it. A process is the session's own if DevDeck saw the session start it (or the
+  process that started it), or it runs under the agent's process.
+  - Only the session's own, or nothing: it runs.
+  - The session's own and others': it's turned away at once, with the `kill <pid>` that
+    stops just its own.
+  - Only others': it waits a minute for your OK, then the agent is turned away and told
+    whose they are.
+
+  Notifications, the Leases page and Activity name the part of the command that's held and
+  what it would stop.
 - **Android on a phone.** With General → Android testing set to only physical phones,
   an agent that starts or drives an emulator is turned away and told to use the
   connected phone, or you're asked to connect one.

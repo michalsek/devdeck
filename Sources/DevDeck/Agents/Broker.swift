@@ -129,17 +129,28 @@ final class Broker: ObservableObject {
         let claimDevices = event.agentDevice.map(claims.devices(for:)) ?? []
         if let call = event.agentDevice { claims.noteCall(call, by: session, now: now) }
         let index = devices.index
+        // Which processes a kill hits is judged against what runs now; the agent's pkill can
+        // only signal the user's own processes.
+        let processes = event.kills.isEmpty ? [:]
+            : ServerScanner.recentProcessTable(maxAge: 1).filter { Darwin.kill($0.key, 0) == 0 }
         let policy = CallPolicy(
             devices: index, servers: servers.servers, builds: monitor.builds, leases: leases.book.leases,
-            owners: agents.owners, androidTesting: settings.androidTesting, metroWarned: metroWarned)
+            owners: agents.owners, androidTesting: settings.androidTesting, metroWarned: metroWarned,
+            processes: processes, agents: agents.liveProcesses)
         var waiter = LeaseBook.Waiter(event, session: session, claimDevices: claimDevices, devices: index, now: now)
-        if let approval = policy.approval(event, by: session) {
-            waiter.approval = approval.reason
-            if let wait = approval.wait { waiter.deadline = min(waiter.deadline, now.addingTimeInterval(wait)) }
+        var refusal: CallPolicy.Refusal?
+        switch policy.reach(event, by: session) {
+        case .needsOK(let approval, let wait)?:
+            waiter.approval = approval
+            if let wait { waiter.deadline = min(waiter.deadline, now.addingTimeInterval(wait)) }
+        case .refused(let refused)?:
+            refusal = refused
+        case nil:
+            break
         }
         waiter.needsUser = CallPolicy.needsUser(waiter, devices: index)
 
-        if let refusal = policy.refusal(waiter) {
+        if let refusal = refusal ?? policy.refusal(waiter) {
             refuse(refusal, waiter)
             return connection.respond(.deny(refusal.reason))
         }
@@ -173,6 +184,8 @@ final class Broker: ObservableObject {
         case .wrongMetro(let reason, let key):
             metroWarned.insert(key)
             activity.add(.metro, agent: session.label, subject: waiter.action, "Warned the agent: " + reason, session: session.id)
+        case .notOnlyYours(let reason, let segment):
+            activity.add(.guarded, agent: session.label, subject: segment, "Turned away: " + reason, session: session.id)
         }
     }
 

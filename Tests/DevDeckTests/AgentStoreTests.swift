@@ -3,7 +3,8 @@ import XCTest
 
 final class AgentStoreTests: XCTestCase {
     private func row(_ pid: Int32, _ ppid: Int32, _ command: String) -> ServerScanner.ProcessRow {
-        ServerScanner.ProcessRow(pid: pid, ppid: ppid, started: Date(timeIntervalSince1970: TimeInterval(pid)), command: command)
+        ServerScanner.ProcessRow(pid: pid, ppid: ppid, started: Date(timeIntervalSince1970: TimeInterval(pid)), command: command,
+            name: "")
     }
 
     func testFindsWhatASessionStartedUnderItsProcess() {

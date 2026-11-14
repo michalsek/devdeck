@@ -50,6 +50,8 @@ struct HookEvent: Equatable {
     let targets: [DeviceTarget]
     /// Devices the call is done with (shut down, simulator server stopped).
     let releases: [DeviceTarget]
+    /// Released devices the call shuts down.
+    let stops: [DeviceTarget]
     /// Heavy work the call starts (a build, a dev server, a device boot).
     let pools: [Pool]
     /// The `agent-device` command in the call, if any (T3 Code's device tools).
@@ -67,9 +69,9 @@ struct HookEvent: Equatable {
     /// The agent's process: the hook's parent.
     let agentPID: Int32?
     /// What the call does to every agent (see `CommandGuard`), so it needs the user's OK.
-    let everyoneEffect: String?
-    /// Processes the command stops, by pid or by the port they listen on.
-    let kills: CommandGuard.Kills
+    let everyoneEffect: LeaseBook.Approval?
+    /// Processes the command stops: by pid, by the port they listen on, or by pattern.
+    let kills: [CommandGuard.Kill]
 
     /// The part of the wait the hook allows that DevDeck uses.
     var waitLimit: TimeInterval { min(maxWait, HookProtocol.maxWait) }
@@ -90,7 +92,7 @@ struct HookEvent: Equatable {
         self.command = command
         path = json[HookProtocol.Field.path] as? String
         agentDevice = command.flatMap(AgentDeviceCall.parse)
-        kills = command.map(CommandGuard.kills) ?? CommandGuard.Kills()
+        kills = command.map(CommandGuard.kills) ?? []
 
         switch json["hook_event_name"] as? String {
         case "SessionEnd", "Stop":
@@ -99,6 +101,7 @@ struct HookEvent: Equatable {
             everyoneEffect = nil
             targets = []
             releases = []
+            stops = []
             pools = []
             holder = nil
         case "PostToolUse", "PostToolUseFailure":
@@ -120,12 +123,14 @@ struct HookEvent: Equatable {
                 targets = parsed.targets
             }
             releases = []
+            stops = []
             pools = []
         case "PreToolUse":
             let tool = json["tool_name"] as? String ?? ""
             var parsed: (action: String, targets: [DeviceTarget], releases: [DeviceTarget])?
             var pools: [Pool] = []
-            var effect: String?
+            var effect: LeaseBook.Approval?
+            var stops: [DeviceTarget] = []
             if tool.hasPrefix(Self.argentPrefix) {
                 let name = String(tool.dropFirst(Self.argentPrefix.count))
                 parsed = Self.argentCall(name, input)
@@ -134,6 +139,8 @@ struct HookEvent: Equatable {
             } else if let command {
                 effect = CommandGuard.everyoneEffect(command)
                 parsed = Self.shellCommand(command)
+                // Shell commands release a device by shutting it down (simctl shutdown, adb emu kill).
+                stops = parsed?.releases ?? []
                 pools = Pool.forShell(command)
                 if let call = agentDevice {
                     // The device may come from the launcher or the session's claim; LeaseStore finds it.
@@ -144,11 +151,10 @@ struct HookEvent: Equatable {
                         : (previous.action, previous.targets + devices, previous.releases)
                 }
                 if parsed == nil, !pools.isEmpty { parsed = (Self.shortName(command), [], []) }
-                if parsed == nil, effect != nil || !kills.isEmpty {
-                    parsed = (command.split(separator: " ").prefix(3).joined(separator: " "), [], [])
-                }
+                if parsed == nil, let segment = effect?.segment ?? kills.first?.segment { parsed = (segment, [], []) }
             }
             everyoneEffect = effect
+            self.stops = stops
             guard let parsed,
                   agentDevice != nil || effect != nil || !kills.isEmpty
                     || !(parsed.targets.isEmpty && parsed.releases.isEmpty && pools.isEmpty)
@@ -293,6 +299,7 @@ extension LeaseBook.Waiter {
     init(_ event: HookEvent, session: AgentSession, claimDevices: [String], devices: DeviceIndex, now: Date) {
         var targets = event.targets.flatMap(devices.resolve)
         var releases = event.releases.flatMap(devices.resolve)
+        let stops = event.stops.flatMap(devices.resolve)
         if let call = event.agentDevice, call.devices.isEmpty {
             let found = claimDevices.flatMap { devices.resolve(.id($0)) }
             if call.closes { releases += found } else { targets += found }
@@ -300,7 +307,7 @@ extension LeaseBook.Waiter {
         let booting: Set<Pool> = [.iosSimulator, .androidEmulator]
         let alreadyRunning = !targets.isEmpty && targets.allSatisfy(devices.isRunning)
         self.init(
-            id: UUID(), session: session, action: event.action, devices: targets, releases: releases,
+            id: UUID(), session: session, action: event.action, devices: targets, releases: releases, stops: stops,
             since: now, deadline: now.addingTimeInterval(event.waitLimit),
             pools: event.pools.filter { !(booting.contains($0) && alreadyRunning) })
     }

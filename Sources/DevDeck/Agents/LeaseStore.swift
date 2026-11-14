@@ -175,8 +175,22 @@ final class LeaseStore: ObservableObject {
     }
 
     /// An agent's call: lets it run, turns it away, or keeps the connection until its turn.
+    /// A boot about to be sent to another running device first checks that the device still
+    /// runs: the device list can be seconds old.
     func submit(_ waiter: LeaseBook.Waiter, connection: BrokerConnection, now: Date) {
         updateResources()
+        let running = devices.index.runningOfKind(booting: waiter.pools, except: waiter.devices)
+        guard !book.suggestions(for: waiter, running: running, now: now).isEmpty else {
+            return decide(waiter, connection: connection, now: now)
+        }
+        Task {
+            await devices.recheck()
+            updateResources()
+            decide(waiter, connection: connection, now: .now)
+        }
+    }
+
+    private func decide(_ waiter: LeaseBook.Waiter, connection: BrokerConnection, now: Date) {
         let index = devices.index
         let decision = book.request(
             waiter, alternatives: index.alternatives(for: waiter.touched),
@@ -206,10 +220,10 @@ final class LeaseStore: ObservableObject {
                 notified.insert(waiter.id)
             } else if let approval = waiter.approval {
                 activity.add(
-                    .guarded, agent: session.label, subject: waiter.action, "Waits for your OK: it \(approval).",
+                    .guarded, agent: session.label, subject: approval.segment, "Waits for your OK: it \(approval.effect).",
                     session: session.id)
                 notifier.waiting(
-                    waiter.id, title: "\(session.label) needs your OK", body: "\"\(waiter.action)\" \(approval).",
+                    waiter.id, title: "\(session.label) needs your OK", body: "\"\(approval.segment)\" \(approval.effect).",
                     page: .agents)
                 notified.insert(waiter.id)
             }
@@ -244,11 +258,13 @@ final class LeaseStore: ObservableObject {
 
     // MARK: Time
 
-    /// What's running against the limits, for the book's room checks.
+    /// What's running against the limits, for the book's room checks. A device a call is
+    /// shutting down no longer counts, so the agent can boot the next one in its place.
     private func updateResources() {
+        let running = devices.running.filter { book.stopping[$0.id] == nil }
         let usage: [Pool: Int] = [
-            .iosSimulator: devices.running.filter { $0.kind == .simulator }.count,
-            .androidEmulator: devices.running.filter { $0.kind == .emulator }.count,
+            .iosSimulator: running.filter { $0.kind == .simulator }.count,
+            .androidEmulator: running.filter { $0.kind == .emulator }.count,
             .build: monitor.builds.count,
             .devServer: servers.devServers.count,
         ]
@@ -296,7 +312,7 @@ final class LeaseStore: ObservableObject {
         for waiter in book.waiters where neededUser.contains(waiter.id) && waiter.needsUser == nil {
             guard let approval = waiter.approval else { continue }
             notifier.waiting(
-                waiter.id, title: "\(waiter.session.label) needs your OK", body: "\"\(waiter.action)\" \(approval).",
+                waiter.id, title: "\(waiter.session.label) needs your OK", body: "\"\(approval.segment)\" \(approval.effect).",
                 page: .agents)
         }
         notifyWaiting()

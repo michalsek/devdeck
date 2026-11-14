@@ -18,7 +18,7 @@ enum LibProc {
                 ? Date(timeIntervalSince1970: TimeInterval(start.tv_sec) + TimeInterval(start.tv_usec) / 1e6) : nil
             table[pid] = ServerScanner.ProcessRow(
                 pid: pid, ppid: process.kp_eproc.e_ppid, started: started,
-                command: arguments(pid, &buffer) ?? path(pid) ?? name(process))
+                command: arguments(pid, &buffer) ?? path(pid) ?? name(process), name: name(process))
         }
         return table
     }

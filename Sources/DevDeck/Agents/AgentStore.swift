@@ -169,6 +169,15 @@ final class AgentStore: ObservableObject {
         return owners
     }
 
+    /// The process of each live session.
+    var liveProcesses: [Int32: AgentSession] {
+        var agents: [Int32: AgentSession] = [:]
+        for record in records.values where record.ended == nil {
+            if let pid = record.pid { agents[pid] = record.session }
+        }
+        return agents
+    }
+
     func forget(_ id: String) {
         records[id] = nil
     }

@@ -21,13 +21,14 @@ struct LeasesView: View {
                     ForEach(asking) { waiter in
                         TimelineView(.periodic(from: .now, by: 1)) { context in
                             LineRow(
-                                symbol: "exclamationmark.shield.fill", tint: .red, title: "\(waiter.session.label): \(waiter.action)",
-                                detail: "It \(waiter.approval ?? "") · waiting \(Format.age(since: waiter.since, now: context.date))"
+                                symbol: "exclamationmark.shield.fill", tint: .red,
+                                title: "\(waiter.session.label): \(waiter.approval?.segment ?? waiter.action)",
+                                detail: "It \(waiter.approval?.effect ?? "") · waiting \(Format.age(since: waiter.since, now: context.date))"
                             ) {
                                 Button("Let Through") { leases.runNow(waiter) }
                                 Button("Turn Away") { leases.dismiss(waiter) }
                             }
-                            .help("It \(waiter.approval ?? "").")
+                            .help("It \(waiter.approval?.effect ?? "").")
                         }
                     }
                 } header: {
